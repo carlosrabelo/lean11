@@ -160,6 +160,105 @@ $Script:IsoMountedByScript = $false
 $Script:SourceDriveLetter = $null
 $Script:OscdimgDownloaded = $false
 
+# PACKAGE POLICY:
+# -------------------------------------------------------------------------
+# Entries in PackageCategories are REMOVAL targets.
+# DefaultKeepPackages are never removed (merged with -KeepPackages).
+# Also kept by omission (not listed): Microsoft.WindowsTerminal,
+# Microsoft.MicrosoftStickyNotes, Microsoft.WindowsCamera, Calculator, etc.
+# Use -KeepPackages to preserve removal-list packages (e.g. "Xbox", "Teams").
+
+# Always preserved: Paint (classic + Store) and Snipping Tool (Screen Sketch)
+$Script:DefaultKeepPackages = @(
+    'Microsoft.Paint'
+    'Microsoft.MSPaint'
+    'Microsoft.ScreenSketch'
+)
+
+$Script:PackageCategories = @{
+    Hardware = @(
+        'AppUp.IntelManagementandSecurityStatus'
+        'DolbyLaboratories.DolbyAccess'
+        'DolbyLaboratories.DolbyDigitalPlusDecoderOEM'
+    )
+
+    MediaEntertainment = @(
+        'Clipchamp.Clipchamp'
+        'Microsoft.ZuneMusic'
+        'Microsoft.ZuneVideo'
+        'Microsoft.MixedReality.Portal'
+        'Microsoft.Microsoft3DViewer'
+    )
+
+    NewsSearch = @(
+        'Microsoft.BingNews'
+        'Microsoft.BingSearch'
+        'Microsoft.BingWeather'
+    )
+
+    Gaming = @(
+        'Microsoft.GamingApp'
+        'Microsoft.Xbox.TCUI'
+        'Microsoft.XboxApp'
+        'Microsoft.XboxGameOverlay'
+        'Microsoft.XboxGamingOverlay'
+        'Microsoft.XboxIdentityProvider'
+        'Microsoft.XboxSpeechToTextOverlay'
+        'Microsoft.MicrosoftSolitaireCollection'
+    )
+
+    Office = @(
+        # Microsoft 365 Copilot app ships as MicrosoftOfficeHub (Store 9WZDNCRD29V9)
+        'Microsoft.MicrosoftOfficeHub'
+        'MicrosoftCorporationII.MicrosoftOfficeHub'
+        'MicrosoftCorporationII.OfficeHub'
+        'Microsoft.Office.OneNote'
+        'Microsoft.OutlookForWindows'
+        'Microsoft.OfficePushNotificationUtility'
+    )
+
+    Communication = @(
+        'MicrosoftTeams'
+        'MSTeams'
+        'Microsoft.Windows.Teams'
+        'Microsoft.LinkedIn'
+        'MicrosoftCorporationII.LinkedInForWindows'
+        'LinkedInForWindows'
+        '7EE7776C.LinkedInforWindows'
+        '5319275A.WhatsAppDesktop'
+        'WhatsAppDesktop'
+        'WhatsApp.WhatsApp'
+        'Microsoft.YourPhone'
+    )
+
+    Utilities = @(
+        'Microsoft.GetHelp'
+        'Microsoft.Getstarted'
+        'Microsoft.StartExperiencesApp'
+        'Microsoft.WindowsFeedbackHub'
+        'Microsoft.WindowsMaps'
+        'Microsoft.WindowsAlarms'
+        'Microsoft.WindowsSoundRecorder'
+        'MicrosoftCorporationII.QuickAssist'
+        'Microsoft.Todos'
+        'Microsoft.PowerAutomateDesktop'
+    )
+
+    Other = @(
+        'Microsoft.People'
+        'Microsoft.Wallet'
+        'Microsoft.Windows.DevHome'
+        'Microsoft.Windows.CrossDevice'
+        'MicrosoftWindows.CrossDevice'
+        'MicrosoftWindows.Client.WebExperience'
+        'Microsoft.WidgetsPlatformRuntime'
+        'MicrosoftCorporationII.MicrosoftFamily'
+        'Microsoft.549981C3F5F10'
+        'Microsoft.Copilot'
+        'Microsoft.Windows.Ai.Copilot.Provider'
+    )
+}
+
 function Write-Log {
     [CmdletBinding()]
     param(
