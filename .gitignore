@@ -1,0 +1,44 @@
+# PowerShell
+*.ps1_
+*.psm1_
+*.psd1_
+
+# Runtime scratch / downloads
+lean11_work/
+lean11_mount/
+lean11.iso
+oscdimg.exe
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Editors / IDEs
+.vscode/
+*.code-workspace
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+desktop.ini
+$RECYCLE.BIN/
+
+# Local tooling
+.nexor/
+.gfc-config
