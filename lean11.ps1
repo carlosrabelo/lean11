@@ -591,6 +591,27 @@ function Clear-WorkingDirectories {
     Write-Log "Working-directory cleanup is not implemented yet." -Level Info
 }
 
+function Resolve-RegPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Hive,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $root = switch ($Hive.ToUpper()) {
+        'HKCU' { 'HKCU:' }
+        'HKLM' { 'HKLM:' }
+        'HKU' { 'Registry::HKEY_USERS' }
+        'HKU\.DEFAULT' { 'Registry::HKEY_USERS\.DEFAULT' }
+        { $_ -match '^HKLM\\Z[A-Z]+' } { "Registry::$Hive" }  # Support for image mode hives
+        default { throw "Unsupported hive: $Hive" }
+    }
+
+    return Join-Path -Path $root -ChildPath $Path
+}
+
 function Should-KeepPackage {
     param(
         [Parameter(Mandatory = $true)]
@@ -610,6 +631,21 @@ function Should-KeepPackage {
         }
     }
     return $false
+}
+
+function Convert-RegistryValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Definition
+    )
+
+    switch ($Definition.Type.ToUpper()) {
+        'REG_DWORD' { return [int]$Definition.Value }
+        'REG_QWORD' { return [long]$Definition.Value }
+        'REG_BINARY' { return ([byte[]][System.ComponentModel.TypeDescriptor]::GetConverter([byte[]]).ConvertFromString($Definition.Value)) }
+        'REG_MULTI_SZ' { return [string[]]$Definition.Value }
+        default { return [string]$Definition.Value }
+    }
 }
 
 function Start-DebloatMode {
