@@ -259,6 +259,98 @@ $Script:PackageCategories = @{
     )
 }
 
+$Script:RegistryOptimizations = @{
+    SystemRequirementsBypass = @(
+        @{Hive='zDEFAULT'; Path='Control Panel\UnsupportedHardwareNotificationCache'; Name='SV1'; Type='REG_DWORD'; Value='0'}
+        @{Hive='zDEFAULT'; Path='Control Panel\UnsupportedHardwareNotificationCache'; Name='SV2'; Type='REG_DWORD'; Value='0'}
+        @{Hive='zNTUSER'; Path='Control Panel\UnsupportedHardwareNotificationCache'; Name='SV1'; Type='REG_DWORD'; Value='0'}
+        @{Hive='zNTUSER'; Path='Control Panel\UnsupportedHardwareNotificationCache'; Name='SV2'; Type='REG_DWORD'; Value='0'}
+        @{Hive='zSYSTEM'; Path='Setup\LabConfig'; Name='BypassCPUCheck'; Type='REG_DWORD'; Value='1'}
+        @{Hive='zSYSTEM'; Path='Setup\LabConfig'; Name='BypassRAMCheck'; Type='REG_DWORD'; Value='1'}
+        @{Hive='zSYSTEM'; Path='Setup\LabConfig'; Name='BypassSecureBootCheck'; Type='REG_DWORD'; Value='1'}
+        @{Hive='zSYSTEM'; Path='Setup\LabConfig'; Name='BypassStorageCheck'; Type='REG_DWORD'; Value='1'}
+        @{Hive='zSYSTEM'; Path='Setup\LabConfig'; Name='BypassTPMCheck'; Type='REG_DWORD'; Value='1'}
+        @{Hive='zSYSTEM'; Path='Setup\MoSetup'; Name='AllowUpgradesWithUnsupportedTPMOrCPU'; Type='REG_DWORD'; Value='1'}
+    )
+
+    TelemetryDisable = @(
+        @{Hive='zNTUSER'; Path='Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo'; Name='Enabled'; Type='REG_DWORD'; Value='0'}
+        @{Hive='zNTUSER'; Path='Software\Microsoft\Windows\CurrentVersion\Privacy'; Name='TailoredExperiencesWithDiagnosticDataEnabled'; Type='REG_DWORD'; Value='0'}
+        @{Hive='zNTUSER'; Path='Software\Microsoft\Speech_OneCore\Settings\OnlineSpeechPrivacy'; Name='HasAccepted'; Type='REG_DWORD'; Value='0'}
+        @{Hive='zNTUSER'; Path='Software\Microsoft\Input\TIPC'; Name='Enabled'; Type='REG_DWORD'; Value='0'}
+        @{Hive='zNTUSER'; Path='Software\Microsoft\InputPersonalization'; Name='RestrictImplicitInkCollection'; Type='REG_DWORD'; Value='1'}
+        @{Hive='zNTUSER'; Path='Software\Microsoft\InputPersonalization'; Name='RestrictImplicitTextCollection'; Type='REG_DWORD'; Value='1'}
+        @{Hive='zNTUSER'; Path='Software\Microsoft\InputPersonalization\TrainedDataStore'; Name='HarvestContacts'; Type='REG_DWORD'; Value='0'}
+        @{Hive='zNTUSER'; Path='Software\Microsoft\Personalization\Settings'; Name='AcceptedPrivacyPolicy'; Type='REG_DWORD'; Value='0'}
+        @{Hive='zSOFTWARE'; Path='Policies\Microsoft\Windows\DataCollection'; Name='AllowTelemetry'; Type='REG_DWORD'; Value='0'}
+        @{Hive='zSYSTEM'; Path='ControlSet001\Services\dmwappushservice'; Name='Start'; Type='REG_DWORD'; Value='4'}
+    )
+
+    SponsoredAppsDisable = @(
+        @{Hive='zNTUSER'; Path='SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name='OemPreInstalledAppsEnabled'; Type='REG_DWORD'; Value='0'}
+        @{Hive='zNTUSER'; Path='SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name='PreInstalledAppsEnabled'; Type='REG_DWORD'; Value='0'}
+        @{Hive='zNTUSER'; Path='SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name='SilentInstalledAppsEnabled'; Type='REG_DWORD'; Value='0'}
+        @{Hive='zSOFTWARE'; Path='Policies\Microsoft\Windows\CloudContent'; Name='DisableWindowsConsumerFeatures'; Type='REG_DWORD'; Value='1'}
+        @{Hive='zNTUSER'; Path='Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name='ContentDeliveryAllowed'; Type='REG_DWORD'; Value='0'}
+        @{Hive='zSOFTWARE'; Path='Microsoft\PolicyManager\current\device\Start'; Name='ConfigureStartPins'; Type='REG_SZ'; Value='{"pinnedList": [{}]}'}
+        @{Hive='zNTUSER'; Path='Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name='FeatureManagementEnabled'; Type='REG_DWORD'; Value='0'}
+        @{Hive='zNTUSER'; Path='Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name='PreInstalledAppsEverEnabled'; Type='REG_DWORD'; Value='0'}
+        @{Hive='zNTUSER'; Path='Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name='SoftLandingEnabled'; Type='REG_DWORD'; Value='0'}
+        @{Hive='zNTUSER'; Path='Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name='SubscribedContentEnabled'; Type='REG_DWORD'; Value='0'}
+        @{Hive='zSOFTWARE'; Path='Policies\Microsoft\PushToInstall'; Name='DisablePushToInstall'; Type='REG_DWORD'; Value='1'}
+        @{Hive='zSOFTWARE'; Path='Policies\Microsoft\MRT'; Name='DontOfferThroughWUAU'; Type='REG_DWORD'; Value='1'}
+        @{Hive='zSOFTWARE'; Path='Policies\Microsoft\Windows\CloudContent'; Name='DisableConsumerAccountStateContent'; Type='REG_DWORD'; Value='1'}
+        @{Hive='zSOFTWARE'; Path='Policies\Microsoft\Windows\CloudContent'; Name='DisableCloudOptimizedContent'; Type='REG_DWORD'; Value='1'}
+    )
+
+    OOBELocalAccount = @(
+        @{Hive='zSOFTWARE'; Path='Microsoft\Windows\CurrentVersion\OOBE'; Name='BypassNRO'; Type='REG_DWORD'; Value='1'}
+    )
+
+    MiscOptimizations = @(
+        @{Hive='zSOFTWARE'; Path='Microsoft\Windows\CurrentVersion\ReserveManager'; Name='ShippedWithReserves'; Type='REG_DWORD'; Value='0'}
+        @{Hive='zSYSTEM'; Path='ControlSet001\Control\BitLocker'; Name='PreventDeviceEncryption'; Type='REG_DWORD'; Value='1'}
+        @{Hive='zSOFTWARE'; Path='Policies\Microsoft\Windows\Windows Chat'; Name='ChatIcon'; Type='REG_DWORD'; Value='3'}
+        @{Hive='zNTUSER'; Path='SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name='TaskbarMn'; Type='REG_DWORD'; Value='0'}
+        @{Hive='zNTUSER'; Path='SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name='ShowCopilotButton'; Type='REG_DWORD'; Value='0'}
+        @{Hive='zSOFTWARE'; Path='Policies\Microsoft\Windows\WindowsCopilot'; Name='TurnOffWindowsCopilot'; Type='REG_DWORD'; Value='1'}
+        @{Hive='zNTUSER'; Path='Software\Policies\Microsoft\Windows\WindowsCopilot'; Name='TurnOffWindowsCopilot'; Type='REG_DWORD'; Value='1'}
+        @{Hive='zSOFTWARE'; Path='Policies\Microsoft\Windows\OneDrive'; Name='DisableFileSyncNGSC'; Type='REG_DWORD'; Value='1'}
+        @{Hive='zSOFTWARE'; Path='Policies\Microsoft\Teams'; Name='DisableInstallation'; Type='REG_DWORD'; Value='1'}
+        @{Hive='zSOFTWARE'; Path='Policies\Microsoft\Windows\Windows Mail'; Name='PreventRun'; Type='REG_DWORD'; Value='1'}
+    )
+}
+
+$Script:ScheduledTasksToRemove = @(
+    'Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser'
+    'Microsoft\Windows\Application Experience\ProgramDataUpdater'
+    'Microsoft\Windows\Chkdsk\Proxy'
+    'Microsoft\Windows\Windows Error Reporting\QueueReporting'
+)
+
+$Script:StartMenuShortcutPatterns = @(
+    'LinkedIn*'
+    'Instagram*'
+    'TikTok*'
+    'Facebook*'
+    'Prime*Video*'
+    'Disney*'
+    'WhatsApp*'
+    'Messenger*'
+    'Spotify*'
+    'Netflix*'
+    'Amazon*'
+    'Hulu*'
+    'Twitter*'
+    'Pinterest*'
+    'Microsoft 365*'
+    'Microsoft 365 Copilot*'
+    'Copilot*'
+    'Office*'
+    'Outlook*'
+    'OneNote*'
+)
+
 function Write-Log {
     [CmdletBinding()]
     param(
