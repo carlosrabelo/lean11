@@ -509,6 +509,84 @@ function Test-PackageNameMatch {
     )
 }
 
+function Build-AutoUnattendContent {
+    param(
+        [string]$Architecture = 'amd64',
+        [string]$Language = 'en-US',
+        [string]$ProductKey
+    )
+
+    $arch = if ($Architecture) { $Architecture } else { 'amd64' }
+    $lang = if ($Language) { $Language } else { 'en-US' }
+
+    $productKeyComponent = ''
+    if ($ProductKey) {
+        $escapedKey = [System.Security.SecurityElement]::Escape($ProductKey)
+        $productKeyComponent = @"
+
+        <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="$arch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+            <ProductKey>$escapedKey</ProductKey>
+        </component>
+"@
+    }
+
+    return @"
+<?xml version="1.0" encoding="utf-8"?>
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+    <settings pass="oobeSystem">
+        <component name="Microsoft-Windows-International-Core" processorArchitecture="$arch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+            <InputLocale>$lang</InputLocale>
+            <SystemLocale>$lang</SystemLocale>
+            <UILanguage>$lang</UILanguage>
+            <UserLocale>$lang</UserLocale>
+        </component>
+        <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="$arch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+            <OOBE>
+                <HideEULAPage>true</HideEULAPage>
+                <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
+                <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+                <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+                <ProtectYourPC>3</ProtectYourPC>
+            </OOBE>
+        </component>
+    </settings>
+    <settings pass="specialize">$productKeyComponent
+        <component name="Microsoft-Windows-Deployment" processorArchitecture="$arch" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+            <RunSynchronous>
+                <RunSynchronousCommand wcm:action="add">
+                    <Order>1</Order>
+                    <Path>reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v BypassNRO /t REG_DWORD /d 1 /f</Path>
+                </RunSynchronousCommand>
+            </RunSynchronous>
+        </component>
+    </settings>
+</unattend>
+"@
+}
+
+function New-AutoUnattendFile {
+    param(
+        [string]$Architecture = 'amd64',
+        [string]$Language = 'en-US'
+    )
+
+    Write-Log "Generating autounattend.xml for OOBE bypass..." -Level Info
+
+    if ($ProductKey) {
+        Write-Log "Including product key in Microsoft-Windows-Shell-Setup" -Level Info
+    }
+
+    $autounattendContent = Build-AutoUnattendContent -Architecture $Architecture -Language $Language -ProductKey $ProductKey
+
+    if (-not $Script:Paths.WorkDir) {
+        throw "Work directory is not initialized; cannot write autounattend.xml"
+    }
+
+    $Script:Paths.AutoUnattend = Join-Path $Script:Paths.WorkDir 'autounattend.xml'
+    Set-Content -Path $Script:Paths.AutoUnattend -Value $autounattendContent -Encoding UTF8
+    Write-Log "AutoUnattend file created at $($Script:Paths.AutoUnattend)" -Level Success
+}
+
 function Clear-WorkingDirectories {
     Write-Log "Working-directory cleanup is not implemented yet." -Level Info
 }
