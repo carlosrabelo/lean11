@@ -487,8 +487,51 @@ function Initialize-Environment {
     }
 }
 
+function Test-PackageNameMatch {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PackageName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Pattern
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Pattern)) { return $false }
+
+    # Prefer anchored / family-style matches over broad substring wildcards.
+    # Use ${Pattern} so "_*" is not parsed as a variable name ($Pattern_).
+    return (
+        ($PackageName -eq $Pattern) -or
+        ($PackageName -like "${Pattern}_*") -or
+        ($PackageName -like "${Pattern}.*") -or
+        ($PackageName.StartsWith($Pattern + '_', [System.StringComparison]::OrdinalIgnoreCase)) -or
+        ($PackageName.StartsWith($Pattern + '.', [System.StringComparison]::OrdinalIgnoreCase))
+    )
+}
+
 function Clear-WorkingDirectories {
     Write-Log "Working-directory cleanup is not implemented yet." -Level Info
+}
+
+function Should-KeepPackage {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PackageName
+    )
+
+    $keepPatterns = @()
+    if ($Script:DefaultKeepPackages) { $keepPatterns += $Script:DefaultKeepPackages }
+    if ($KeepPackages) { $keepPatterns += $KeepPackages }
+
+    foreach ($keep in $keepPatterns) {
+        if ([string]::IsNullOrWhiteSpace($keep)) { continue }
+        # Anchored match first; also allow short user tokens (e.g. "Xbox", "Teams")
+        if ((Test-PackageNameMatch -PackageName $PackageName -Pattern $keep) -or
+            ($PackageName -like "*$keep*")) {
+            return $true
+        }
+    }
+    return $false
 }
 
 function Start-DebloatMode {
