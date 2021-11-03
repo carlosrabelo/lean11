@@ -487,6 +487,433 @@ function Initialize-Environment {
     }
 }
 
+function Get-SourceIso {
+    Write-Log "Configuring source ISO..." -Level Info
+
+    do {
+        if (-not $ISO) {
+            $isoInput = Read-Host "Enter the drive letter of mounted Windows 11 ISO (e.g., E) or path to ISO file"
+        } else {
+            $isoInput = $ISO
+        }
+
+        # Check if input is a file path (ISO file)
+        if ($isoInput -match '\.(iso|ISO)$' -or (Test-Path $isoInput -PathType Leaf)) {
+            Write-Log "Mounting ISO file: $isoInput" -Level Info
+            try {
+                $mountResult = Mount-DiskImage -ImagePath $isoInput -PassThru -ErrorAction Stop
+                $driveLetter = ($mountResult | Get-Volume).DriveLetter
+                if (-not $driveLetter) {
+                    Write-Log "Failed to get drive letter after mounting ISO" -Level Error
+                    $ISO = $null
+                    continue
+                }
+                Write-Log "ISO mounted successfully at drive $driveLetter" -Level Success
+                $Script:IsoMountedByScript = $true
+            } catch {
+                Write-Log "Failed to mount ISO: $_" -Level Error
+                $ISO = $null
+                continue
+            }
+        } else {
+            # Accept both "E" and "E:" formats
+            if ($isoInput -notmatch '^[c-zC-Z]:?$') {
+                Write-Log "Invalid input. Enter a drive letter (C-Z) or path to ISO file" -Level Warning
+                $ISO = $null
+                continue
+            }
+            $driveLetter = $isoInput
+            $Script:IsoMountedByScript = $false
+        }
+
+        # Normalize to drive letter with colon and backslash
+        $driveLetterOnly = $driveLetter.TrimEnd(':')
+        $driveLetter = "${driveLetterOnly}:"
+        $driveRoot = "${driveLetterOnly}:\"
+        $Script:SourceDriveLetter = $driveLetter
+
+        Write-Log "Validating ISO at drive $driveLetter..." -Level Info
+
+        # First check if drive exists
+        if (-not (Test-Path $driveRoot)) {
+            Write-Log "Drive $driveLetter does not exist or is not accessible" -Level Error
+            Write-Log "Available drives:" -Level Info
+            Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Name -match '^[A-Z]$' } | ForEach-Object {
+                Write-Log "  $($_.Name): - $($_.Description)" -Level Info
+            }
+            $ISO = $null
+            continue
+        }
+
+        # Check for sources directory
+        $sourcesPath = Join-Path $driveRoot "sources"
+        if (-not (Test-Path $sourcesPath)) {
+            Write-Log "Sources directory not found at $sourcesPath" -Level Error
+            Write-Log "This does not appear to be a valid Windows installation media" -Level Error
+            Write-Log "Root directory contents:" -Level Info
+            try {
+                Get-ChildItem -Path $driveRoot -ErrorAction Stop | ForEach-Object {
+                    Write-Log "  - $($_.Name)" -Level Info
+                }
+            } catch {
+                Write-Log "Could not list directory contents: $_" -Level Warning
+            }
+            $ISO = $null
+            continue
+        }
+
+        # Check for required WIM files
+        $bootWimPath = Join-Path $sourcesPath "boot.wim"
+        $installWimPath = Join-Path $sourcesPath "install.wim"
+        $installEsdPath = Join-Path $sourcesPath "install.esd"
+
+        $validationErrors = @()
+
+        if (-not (Test-Path $bootWimPath)) {
+            $validationErrors += "boot.wim not found"
+        }
+
+        if (-not (Test-Path $installWimPath) -and -not (Test-Path $installEsdPath)) {
+            $validationErrors += "Neither install.wim nor install.esd found"
+        }
+
+        if ($validationErrors.Count -gt 0) {
+            Write-Log "ISO validation failed:" -Level Error
+            foreach ($error in $validationErrors) {
+                Write-Log "  - $error" -Level Error
+            }
+            Write-Log "Contents of sources directory:" -Level Info
+            try {
+                Get-ChildItem -Path $sourcesPath -ErrorAction Stop | Select-Object -First 10 | ForEach-Object {
+                    Write-Log "  - $($_.Name) ($([math]::Round($_.Length/1MB, 2)) MB)" -Level Info
+                }
+            } catch {
+                Write-Log "Could not list sources directory: $_" -Level Warning
+            }
+            $ISO = $null
+            continue
+        }
+
+        # Try to verify it's actually Windows 11
+        try {
+            $imageInfo = Get-WindowsImage -ImagePath $bootWimPath -Index 1 -ErrorAction Stop
+            $osVersion = $imageInfo.Version
+            Write-Log "Detected Windows version: $osVersion" -Level Info
+
+            # Windows 11 has build 22000 or higher
+            if ($imageInfo.Build -lt 22000) {
+                Write-Log "Warning: This appears to be Windows 10 (Build $($imageInfo.Build))" -Level Warning
+                Write-Log "Lean11 is designed for Windows 11 (Build 22000+)" -Level Warning
+                $response = Read-Host "Continue anyway? (y/N)"
+                if ($response -notmatch '^[Yy]') {
+                    $ISO = $null
+                    continue
+                }
+            } else {
+                Write-Log "Windows 11 detected (Build $($imageInfo.Build))" -Level Success
+            }
+        } catch {
+            Write-Log "Could not verify Windows version from boot.wim: $_" -Level Warning
+            Write-Log "Proceeding with validation..." -Level Info
+        }
+
+        Write-Log "Source ISO validated successfully: $driveLetter" -Level Success
+        return $driveLetter
+
+    } while ($true)
+}
+
+function Copy-WindowsSource {
+    param([string]$SourcePath)
+
+    # Normalize source path - ensure it has : and \ for root access
+    $SourcePath = $SourcePath.Trim().TrimEnd(':').TrimEnd('\')
+    $driveRoot = "${SourcePath}:\"
+
+    Write-Log "Copying Windows installation files from $driveRoot..." -Level Info
+    # Give Windows a moment to settle if ISO was just mounted
+    Start-Sleep -Milliseconds 500
+
+    # Try multiple verification methods
+    $pathExists = $false
+
+    # Method 1: Test-Path
+    if (Test-Path $driveRoot) {
+        $pathExists = $true
+    }
+
+    # Method 2: Get-PSDrive
+    if (-not $pathExists) {
+        $drive = Get-PSDrive -Name $SourcePath -PSProvider FileSystem -ErrorAction SilentlyContinue
+        if ($drive) {
+            $pathExists = $true
+        }
+    }
+
+    # Method 3: Get-Volume
+    if (-not $pathExists) {
+        $volume = Get-Volume -DriveLetter $SourcePath -ErrorAction SilentlyContinue
+        if ($volume) {
+            $pathExists = $true
+        }
+    }
+
+    if (-not $pathExists) {
+        Write-Log "Source path not accessible: $driveRoot" -Level Error
+        Write-Log "Attempted path: '$driveRoot' (Length: $($driveRoot.Length))" -Level Error
+        Write-Log "Verifying drives..." -Level Info
+        try {
+            Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Name -match '^[A-Z]$' } | ForEach-Object {
+                Write-Log "  Available drive: $($_.Name): $($_.Root)" -Level Info
+            }
+        } catch {
+            Write-Log "Could not enumerate drives: $_" -Level Warning
+        }
+        throw "Source path validation failed"
+    }
+
+    $SourcePath = $driveRoot
+
+    # Check available disk space - more reasonable requirement
+    try {
+        Write-Log "Calculating source size, this may take a moment..." -Level Info
+        $sourceSize = (Get-ChildItem -Path $SourcePath -Recurse -Force -ErrorAction Stop | Measure-Object -Property Length -Sum).Sum / 1GB
+        Write-Log "Source size: $([math]::Round($sourceSize, 2))GB" -Level Info
+        $availableSpace = (Get-PSDrive -Name ($Script:Paths.WorkDir -split ':')[0] -ErrorAction Stop).Free / 1GB
+
+        # More reasonable space requirement - 1.2x instead of 1.5x
+        $requiredSpace = $sourceSize * 1.2
+        if ($availableSpace -lt $requiredSpace) {
+            Write-Log "Insufficient disk space. Required: $([math]::Round($requiredSpace, 2))GB, Available: $([math]::Round($availableSpace, 2))GB" -Level Error
+            throw "Insufficient disk space for operation"
+        }
+        Write-Log "Disk space check passed. Required: $([math]::Round($requiredSpace, 2))GB, Available: $([math]::Round($availableSpace, 2))GB" -Level Info
+    } catch [System.Management.Automation.DriveNotFoundException] {
+        Write-Log "Could not access target drive for space verification" -Level Error
+        throw "Target drive not accessible. Please verify the SCRATCH parameter."
+    } catch {
+        if ("$_" -match 'Insufficient disk space') { throw }
+        Write-Log "Disk space verification failed: $_" -Level Error
+        Write-Log "This may indicate insufficient permissions or disk access issues" -Level Warning
+        if ($NonInteractive) {
+            throw "Disk space verification failed in non-interactive mode: $_"
+        }
+        $response = Read-Host "Continue anyway? (y/N)"
+        if ($response -notmatch '^[Yy]') {
+            throw "Operation cancelled by user"
+        }
+        Write-Log "User chose to continue despite disk space verification failure" -Level Warning
+    }
+
+    # Handle install.esd conversion
+    $sourcesPath = Join-Path $SourcePath "sources"
+    $esdPath = Join-Path $sourcesPath "install.esd"
+    $wimPath = Join-Path $sourcesPath "install.wim"
+
+    if ((Test-Path $esdPath) -and -not (Test-Path $wimPath)) {
+        Write-Log "Found install.esd, conversion required" -Level Warning
+        try {
+            $images = Get-WindowsImage -ImagePath $esdPath -ErrorAction Stop
+            Write-Log "Available editions:" -Level Info
+            foreach ($img in $images) {
+                Write-Host "  [$($img.ImageIndex)] $($img.ImageName)"
+            }
+
+            do {
+                $index = Read-Host "Enter the image index to convert"
+                if ($images.ImageIndex -notcontains $index) {
+                    Write-Log "Invalid index. Please select from the list above." -Level Warning
+                    continue
+                }
+                break
+            } while ($true)
+
+            Write-Log "Converting install.esd to install.wim (this may take 15-30 minutes)..." -Level Info
+            Write-Log "Please be patient, do not interrupt this process..." -Level Warning
+
+            $destWimPath = Join-Path $Script:Paths.WorkDir "sources\install.wim"
+            Export-WindowsImage -SourceImagePath $esdPath `
+                               -SourceIndex $index `
+                               -DestinationImagePath $destWimPath `
+                               -CompressionType Maximum `
+                               -CheckIntegrity -ErrorAction Stop
+
+            Write-Log "ESD to WIM conversion completed successfully" -Level Success
+        } catch [System.IO.FileNotFoundException] {
+            Write-Log "Source ESD file not found or became inaccessible" -Level Error
+            throw "ESD conversion failed: Source file not accessible"
+        } catch [System.UnauthorizedAccessException] {
+            Write-Log "Access denied during ESD conversion" -Level Error
+            throw "ESD conversion failed: Insufficient permissions"
+        } catch {
+            Write-Log "Failed to convert install.esd: $_" -Level Error
+            Write-Log "Possible causes:" -Level Warning
+            Write-Log "  - Corrupted ESD file" -Level Warning
+            Write-Log "  - Insufficient disk space (needs ~2x source size)" -Level Warning
+            Write-Log "  - Source media disconnected during conversion" -Level Warning
+            throw "ESD conversion failed"
+        }
+    }
+
+    try {
+        Write-Log "Copying files from $SourcePath to $($Script:Paths.WorkDir)" -Level Info
+        Write-Log "This may take several minutes depending on your disk speed..." -Level Info
+        Copy-Item -Path "$SourcePath\*" -Destination $Script:Paths.WorkDir -Recurse -Force -ErrorAction Stop
+        Write-Log "File copy completed successfully" -Level Success
+    } catch [System.UnauthorizedAccessException] {
+        Write-Log "Access denied while copying files. Ensure you have administrator privileges." -Level Error
+        throw "File copy failed due to insufficient permissions"
+    } catch [System.IO.IOException] {
+        Write-Log "I/O error during file copy: $_" -Level Error
+        Write-Log "This may indicate:" -Level Warning
+        Write-Log "  - Insufficient disk space" -Level Warning
+        Write-Log "  - Source media is damaged or disconnected" -Level Warning
+        Write-Log "  - Target drive is having issues" -Level Warning
+        throw "File copy failed due to I/O error"
+    } catch {
+        Write-Log "Failed to copy Windows source files: $_" -Level Error
+        Write-Log "Source path: $SourcePath" -Level Info
+        Write-Log "Destination: $($Script:Paths.WorkDir)" -Level Info
+        throw
+    }
+
+    # Clean up install.esd if it exists in work directory
+    $workEsdPath = Join-Path (Join-Path $Script:Paths.WorkDir "sources") "install.esd"
+    if (Test-Path $workEsdPath) {
+        Write-Log "Removing install.esd from work directory" -Level Info
+        Remove-Item $workEsdPath -Force -ErrorAction SilentlyContinue
+    }
+
+    Write-Log "Windows source files copied successfully" -Level Success
+}
+
+function Select-WindowsImage {
+    Write-Log "Detecting available Windows editions..." -Level Info
+
+    $wimPath = "$($Script:Paths.WorkDir)\sources\install.wim"
+    $images = Get-WindowsImage -ImagePath $wimPath
+
+    Write-Log "Available editions:" -Level Info
+    foreach ($img in $images) {
+        Write-Host "  [$($img.ImageIndex)] $($img.ImageName)"
+    }
+
+    do {
+        $index = Read-Host "Select image index"
+        if ($images.ImageIndex -contains $index) {
+            Write-Log "Selected: $($images | Where-Object {$_.ImageIndex -eq $index} | Select-Object -ExpandProperty ImageName)" -Level Success
+            return $index
+        }
+        Write-Log "Invalid index. Please try again." -Level Warning
+    } while ($true)
+}
+
+function Mount-WindowsInstallImage {
+    param([int]$Index)
+
+    Write-Log "Mounting Windows image (Index: $Index)..." -Level Info
+
+    $wimPath = "$($Script:Paths.WorkDir)\sources\install.wim"
+    $adminGroup = Get-AdministratorsGroup
+
+    # Check for existing mounts
+    try {
+        $existingMounts = Get-WindowsImage -Mounted -ErrorAction Stop
+        if ($existingMounts) {
+            $mountAtTargetPath = $existingMounts | Where-Object { $_.MountPath -eq $Script:Paths.MountDir }
+            if ($mountAtTargetPath) {
+                Write-Log "Dismounting existing mount at $($Script:Paths.MountDir)" -Level Warning
+                try {
+                    Dismount-WindowsImage -Path $Script:Paths.MountDir -Discard -ErrorAction Stop
+                    Write-Log "Successfully dismounted previous image" -Level Success
+                } catch {
+                    Write-Log "Failed to dismount gracefully, attempting cleanup..." -Level Warning
+                    & dism /Cleanup-Wim
+                    Start-Sleep -Seconds 2
+                }
+            }
+        }
+    } catch {
+        Write-Log "Could not check for existing mounts: $_" -Level Warning
+        Write-Log "Attempting DISM cleanup to clear any orphaned mounts..." -Level Info
+        & dism /Cleanup-Wim >$null 2>&1
+    }
+
+    # Take ownership and set permissions with proper error handling
+    try {
+        Write-Log "Setting permissions for WIM file..." -Level Info
+        & takeown /F $wimPath >$null 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Log "Warning: takeown failed with exit code $LASTEXITCODE" -Level Warning
+        }
+        
+        & icacls $wimPath /grant "$($adminGroup):(F)" >$null 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Log "Warning: icacls failed with exit code $LASTEXITCODE" -Level Warning
+        }
+        
+        Set-ItemProperty -Path $wimPath -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
+    } catch {
+        Write-Log "Failed to set permissions on WIM file: $_" -Level Warning
+    }
+
+    try {
+        Mount-WindowsImage -ImagePath $wimPath -Index $Index -Path $Script:Paths.MountDir -ErrorAction Stop
+        Write-Log "Image mounted successfully" -Level Success
+    } catch {
+        Write-Log "Failed to mount Windows image: $_" -Level Error
+
+        # Provide helpful troubleshooting information
+        Write-Log "Troubleshooting steps:" -Level Info
+        Write-Log "  1. Ensure no other applications are accessing the mount directory" -Level Info
+        Write-Log "  2. Try running: dism /Cleanup-Wim" -Level Info
+        Write-Log "  3. Check available disk space on mount drive" -Level Info
+        Write-Log "  4. Verify WIM file is not corrupted: dism /Get-WimInfo /WimFile:`"$wimPath`"" -Level Info
+
+        # Check if mount directory is accessible
+        if (Test-Path $Script:Paths.MountDir) {
+            $mountItems = Get-ChildItem -Path $Script:Paths.MountDir -ErrorAction SilentlyContinue
+            if ($mountItems) {
+                Write-Log "  Mount directory is not empty - may need manual cleanup" -Level Warning
+            }
+        }
+
+        throw "Image mounting failed. Please review troubleshooting steps above."
+    }
+
+    try {
+        # Detect architecture dynamically
+        $imageInfo = & dism /English /Get-WimInfo /wimFile:$wimPath /index:$Index
+        $architectureMatch = $imageInfo | Select-String -Pattern 'Architecture : (.*)'
+        if ($architectureMatch) {
+            $architecture = $architectureMatch.Matches.Groups[1].Value
+            if ($architecture -eq 'x64') { $architecture = 'amd64' }
+        } else {
+            $architecture = 'amd64'  # Default assumption
+        }
+
+        # Detect language dynamically
+        $imageIntl = & dism /English /Get-Intl /Image:$($Script:Paths.MountDir)
+        $languageMatch = $imageIntl | Select-String -Pattern 'Default system UI language : ([a-zA-Z]{2}-[a-zA-Z]{2})'
+        if ($languageMatch) {
+            $language = $languageMatch.Matches.Groups[1].Value
+        } else {
+            $language = 'en-US'  # Default assumption
+        }
+
+        Write-Log "Architecture: $architecture | Language: $language" -Level Info
+    } catch {
+        Write-Log "Failed to get image information: $_" -Level Warning
+        $architecture = 'amd64'  # Default assumption
+        $language = 'en-US'      # Default assumption
+    }
+
+    return @{
+        Architecture = $architecture
+        Language = $language
+    }
+}
+
 function Test-PackageNameMatch {
     param(
         [Parameter(Mandatory = $true)]
