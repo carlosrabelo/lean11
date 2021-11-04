@@ -936,6 +936,62 @@ function Test-PackageNameMatch {
     )
 }
 
+function Remove-BloatwarePackages {
+    Write-Log "Analyzing installed provisioned packages..." -Level Info
+
+    $installedPackages = & dism /English /image:$($Script:Paths.MountDir) /Get-ProvisionedAppxPackages |
+        ForEach-Object { if ($_ -match 'PackageName : (.*)') { $matches[1] } }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Log "DISM Get-ProvisionedAppxPackages failed with exit code $LASTEXITCODE" -Level Warning
+    }
+
+    $removalList = @()
+    foreach ($category in $Script:PackageCategories.Keys) {
+        foreach ($packagePrefix in $Script:PackageCategories[$category]) {
+            $matchingPackages = $installedPackages | Where-Object { Test-PackageNameMatch -PackageName $_ -Pattern $packagePrefix }
+            $removalList += $matchingPackages
+        }
+    }
+
+    $removalList = $removalList | Select-Object -Unique
+
+    if ($KeepPackages.Count -gt 0) {
+        Write-Log "Keeping user-specified packages: $($KeepPackages -join ', ')" -Level Info
+    }
+    $removalList = @($removalList | Where-Object { -not (Should-KeepPackage -PackageName $_) })
+
+    Write-Log "Removing $($removalList.Count) bloatware packages..." -Level Info
+
+    foreach ($package in $removalList) {
+        Write-Log "  Removing: $package" -Level Info
+        & dism /English /image:$($Script:Paths.MountDir) /Remove-ProvisionedAppxPackage /PackageName:$package >$null 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Log "  DISM failed removing $package (exit $LASTEXITCODE)" -Level Warning
+        }
+    }
+
+    Write-Log "Bloatware removal completed" -Level Success
+}
+
+function Remove-OneDrive {
+    Write-Log "Removing OneDrive..." -Level Info
+    $adminGroup = Get-AdministratorsGroup
+
+    $onedriveSetup = "$($Script:Paths.MountDir)\Windows\System32\OneDriveSetup.exe"
+    if (Test-Path $onedriveSetup) {
+        try {
+            & takeown /f $onedriveSetup >$null 2>&1
+            & icacls $onedriveSetup /grant "$($adminGroup):(F)" /T /C >$null 2>&1
+            Remove-Item -Path $onedriveSetup -Force -ErrorAction Stop
+            Write-Log "OneDrive removed successfully" -Level Success
+        } catch {
+            Write-Log "Failed to remove OneDrive: $_" -Level Warning
+        }
+    } else {
+        Write-Log "OneDrive not found in image" -Level Info
+    }
+}
+
 function Build-AutoUnattendContent {
     param(
         [string]$Architecture = 'amd64',
