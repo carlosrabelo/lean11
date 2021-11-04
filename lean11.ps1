@@ -1116,6 +1116,172 @@ function Remove-TelemetryTasks {
     Write-Log "Telemetry tasks removed" -Level Success
 }
 
+function Optimize-WindowsImage {
+    Write-Log "Running DISM cleanup and optimization..." -Level Info
+    & dism /English /Image:$($Script:Paths.MountDir) /Cleanup-Image /StartComponentCleanup /ResetBase
+    if ($LASTEXITCODE -ne 0) {
+        throw "DISM Cleanup-Image failed with exit code $LASTEXITCODE"
+    }
+    Write-Log "Image optimization completed" -Level Success
+}
+
+function Dismount-AndExport-Image {
+    param([int]$Index)
+
+    Write-Log "Saving and unmounting Windows image..." -Level Info
+    Dismount-WindowsImage -Path $Script:Paths.MountDir -Save
+
+    Write-Log "Exporting optimized image with maximum compression..." -Level Info
+    $wimPath = "$($Script:Paths.WorkDir)\sources\install.wim"
+    $wimPathTemp = "$($Script:Paths.WorkDir)\sources\install2.wim"
+
+    if (Test-Path $wimPathTemp) {
+        Remove-Item -Path $wimPathTemp -Force -ErrorAction SilentlyContinue
+    }
+
+    & dism /English /Export-Image /SourceImageFile:$wimPath /SourceIndex:$Index /DestinationImageFile:$wimPathTemp /Compress:recovery
+    if ($LASTEXITCODE -ne 0) {
+        throw "DISM Export-Image failed with exit code $LASTEXITCODE. Original install.wim was preserved."
+    }
+    if (-not (Test-Path $wimPathTemp) -or (Get-Item $wimPathTemp).Length -eq 0) {
+        throw "DISM Export-Image reported success but install2.wim is missing or empty. Original install.wim was preserved."
+    }
+
+    Remove-Item -Path $wimPath -Force
+    Rename-Item -Path $wimPathTemp -NewName 'install.wim'
+
+    Write-Log "Image export completed" -Level Success
+}
+
+function Process-BootImage {
+    Write-Log "Processing boot image..." -Level Info
+
+    $bootWimPath = "$($Script:Paths.WorkDir)\sources\boot.wim"
+    $adminGroup = Get-AdministratorsGroup
+
+    & takeown /F $bootWimPath >$null 2>&1
+    & icacls $bootWimPath /grant "$($adminGroup):(F)" >$null 2>&1
+    Set-ItemProperty -Path $bootWimPath -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
+
+    $bootMounted = $false
+    $hivesMounted = $false
+    try {
+        Mount-WindowsImage -ImagePath $bootWimPath -Index 2 -Path $Script:Paths.MountDir
+        $bootMounted = $true
+
+        Mount-RegistryHives
+        $hivesMounted = $true
+
+        Write-Log "Applying system requirement bypasses to boot image..." -Level Info
+        foreach ($opt in $Script:RegistryOptimizations.SystemRequirementsBypass) {
+            Set-RegistryOptimization -Optimization $opt -Description "Boot image bypass"
+        }
+    } finally {
+        if ($hivesMounted) {
+            Dismount-RegistryHives
+        }
+        if ($bootMounted) {
+            Write-Log "Unmounting boot image..." -Level Info
+            try {
+                Dismount-WindowsImage -Path $Script:Paths.MountDir -Save -ErrorAction Stop
+            } catch {
+                Write-Log "Save dismount failed, discarding boot mount: $_" -Level Warning
+                Dismount-WindowsImage -Path $Script:Paths.MountDir -Discard -ErrorAction SilentlyContinue
+                throw
+            }
+        }
+    }
+
+    Write-Log "Boot image processing completed" -Level Success
+}
+
+function Test-OscdimgIntegrity {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path $Path) -or (Get-Item $Path).Length -eq 0) {
+        throw "oscdimg.exe is missing or empty: $Path"
+    }
+
+    # Verify PE TimeDateStamp + SizeOfImage match the Microsoft symbol-server identity
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -lt 64 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
+        throw "oscdimg.exe is not a valid PE executable"
+    }
+    $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+    if (($peOffset + 24 + 56) -gt $bytes.Length) {
+        throw "oscdimg.exe PE headers are truncated"
+    }
+    $peSig = [System.Text.Encoding]::ASCII.GetString($bytes, $peOffset, 4)
+    if ($peSig -ne "PE`0`0") {
+        throw "oscdimg.exe is missing a PE signature"
+    }
+    $timeDateStamp = [BitConverter]::ToUInt32($bytes, $peOffset + 8)
+    $sizeOfImage = [BitConverter]::ToUInt32($bytes, $peOffset + 24 + 56)
+    $fullId = "{0:X8}{1:X}" -f $timeDateStamp, $sizeOfImage
+    if ($fullId -ne $Config.OscdimgSymbolId) {
+        throw "oscdimg.exe PE identity '$fullId' does not match expected '$($Config.OscdimgSymbolId)'"
+    }
+
+    $signature = Get-AuthenticodeSignature -FilePath $Path
+    if ($signature.Status -ne 'Valid') {
+        throw "oscdimg.exe Authenticode status is '$($signature.Status)' (expected Valid)"
+    }
+    $subject = $signature.SignerCertificate.Subject
+    if ($subject -notmatch 'Microsoft') {
+        throw "oscdimg.exe is not signed by Microsoft (subject: $subject)"
+    }
+
+    Write-Log "oscdimg.exe integrity verified (PE id + Microsoft Authenticode)" -Level Success
+}
+
+function Get-OscdimgTool {
+    Write-Log "Locating oscdimg.exe..." -Level Info
+
+    # Prefer Windows ADK
+    $hostArchitecture = $Env:PROCESSOR_ARCHITECTURE
+    if ($hostArchitecture -eq 'AMD64') { $hostArchitecture = 'amd64' }
+
+    $adkDepTools = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\$hostArchitecture\Oscdimg"
+    $adkPath = Join-Path $adkDepTools "oscdimg.exe"
+
+    if (Test-Path $adkPath) {
+        Write-Log "Using oscdimg.exe from system ADK" -Level Success
+        return $adkPath
+    }
+
+    # Download from Microsoft symbol server only if not already present locally
+    if (-not (Test-Path $Script:Paths.Oscdimg)) {
+        try {
+            Write-Log "ADK not found. Downloading oscdimg.exe from Microsoft symbol server..." -Level Info
+            Invoke-WebRequest -Uri $Config.OscdimgUrl -OutFile $Script:Paths.Oscdimg -ErrorAction Stop
+            $Script:OscdimgDownloaded = $true
+        } catch {
+            Write-Log "Failed to download oscdimg.exe: $_" -Level Error
+            Write-Log "Please install Windows ADK or place a verified oscdimg.exe next to the script" -Level Error
+            throw
+        }
+    } else {
+        Write-Log "oscdimg.exe already exists locally" -Level Info
+    }
+
+    try {
+        Test-OscdimgIntegrity -Path $Script:Paths.Oscdimg
+    } catch {
+        if ($Script:OscdimgDownloaded -and (Test-Path $Script:Paths.Oscdimg)) {
+            Remove-Item -Path $Script:Paths.Oscdimg -Force -ErrorAction SilentlyContinue
+            $Script:OscdimgDownloaded = $false
+        }
+        Write-Log "oscdimg.exe failed integrity checks: $_" -Level Error
+        throw
+    }
+
+    Write-Log "Using verified local oscdimg.exe" -Level Success
+    return $Script:Paths.Oscdimg
+}
+
 function Build-AutoUnattendContent {
     param(
         [string]$Architecture = 'amd64',
@@ -1194,8 +1360,105 @@ function New-AutoUnattendFile {
     Write-Log "AutoUnattend file created at $($Script:Paths.AutoUnattend)" -Level Success
 }
 
+function New-BootableIso {
+    param(
+        [string]$Architecture = 'amd64',
+        [string]$Language = 'en-US'
+    )
+
+    Write-Log "Creating bootable ISO..." -Level Info
+
+    # Always regenerate into the work directory so ProductKey/locale stay in sync
+    New-AutoUnattendFile -Architecture $Architecture -Language $Language
+
+    $oscdimg = Get-OscdimgTool
+
+    # Verify boot files exist before creating ISO
+    $etfsboot = "$($Script:Paths.WorkDir)\boot\etfsboot.com"
+    $efisys = "$($Script:Paths.WorkDir)\efi\microsoft\boot\efisys.bin"
+
+    if (-not (Test-Path $etfsboot)) {
+        Write-Log "Warning: etfsboot.com not found at $etfsboot" -Level Warning
+    }
+    if (-not (Test-Path $efisys)) {
+        Write-Log "Warning: efisys.bin not found at $efisys" -Level Warning
+    }
+
+    # Create bootdata string
+    $bootData = "2#p0,e,b$($Script:Paths.WorkDir)\boot\etfsboot.com#pEF,e,b$($Script:Paths.WorkDir)\efi\microsoft\boot\efisys.bin"
+
+    Write-Log "Creating ISO with boot data: $bootData" -Level Info
+
+    try {
+        & $oscdimg -m -o -u2 -udfver102 "-bootdata:$bootData" $Script:Paths.WorkDir $Script:Paths.IsoOutput
+        if ($LASTEXITCODE -eq 0) {
+            Write-Log "ISO created successfully: $($Script:Paths.IsoOutput)" -Level Success
+
+            if (Test-Path $Script:Paths.IsoOutput) {
+                $isoSize = (Get-Item $Script:Paths.IsoOutput).Length / 1GB
+                Write-Log "ISO size: $([math]::Round($isoSize, 2))GB" -Level Info
+            } else {
+                throw "ISO file was not created"
+            }
+        } else {
+            throw "oscdimg failed with exit code $LASTEXITCODE"
+        }
+    } catch {
+        Write-Log "Failed to create ISO: $_" -Level Error
+        throw
+    }
+}
+
 function Clear-WorkingDirectories {
-    Write-Log "Working-directory cleanup is not implemented yet." -Level Info
+    Write-Log "Cleaning up working directories..." -Level Info
+
+    # Only dismount if we mounted it
+    if ($Script:IsoMountedByScript -and $Script:SourceDriveLetter) {
+        try {
+            Write-Log "Dismounting ISO from drive $Script:SourceDriveLetter..." -Level Info
+            Get-Volume -DriveLetter $Script:SourceDriveLetter[0] -ErrorAction SilentlyContinue |
+                Get-DiskImage |
+                Dismount-DiskImage -ErrorAction SilentlyContinue
+            Write-Log "ISO dismounted successfully" -Level Success
+        } catch {
+            Write-Log "Could not dismount ISO: $_" -Level Warning
+        }
+    }
+
+    # Never delete the repo autounattend.xml template. Only remove scratch dirs
+    # and oscdimg.exe when this run downloaded it.
+    $itemsToRemove = @(
+        @{Path=$Script:Paths.WorkDir; Desc="Working directory"}
+        @{Path=$Script:Paths.MountDir; Desc="Mount directory"}
+    )
+    if ($Script:OscdimgDownloaded -and $Script:Paths.Oscdimg) {
+        $itemsToRemove += @{Path=$Script:Paths.Oscdimg; Desc="downloaded oscdimg.exe"}
+    }
+
+    foreach ($item in $itemsToRemove) {
+        if ($item.Path -and (Test-Path $item.Path)) {
+            try {
+                Remove-Item -Path $item.Path -Recurse -Force -ErrorAction Stop
+                Write-Log "  Removed: $($item.Desc)" -Level Info
+            } catch {
+                Write-Log "  Initial removal failed for $($item.Desc), attempting forced removal..." -Level Warning
+
+                try {
+                    if (-not $item.Path) { throw "Path is null" }
+                    $adminGroup = Get-AdministratorsGroup
+                    & takeown /F $item.Path /R /D Y >$null 2>&1
+                    & icacls $item.Path /grant "$($adminGroup):(F)" /T /C >$null 2>&1
+                    Remove-Item -Path $item.Path -Recurse -Force -ErrorAction Stop
+                    Write-Log "  Removed: $($item.Desc) (forced)" -Level Info
+                } catch {
+                    Write-Log "  Failed to remove: $($item.Desc) - $_" -Level Warning
+                    Write-Log "  You may need to manually delete: $($item.Path)" -Level Warning
+                }
+            }
+        }
+    }
+
+    Write-Log "Cleanup completed" -Level Success
 }
 
 function Resolve-RegPath {
