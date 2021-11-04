@@ -1523,7 +1523,70 @@ function Start-DebloatMode {
 }
 
 function Start-ImageMode {
-    Write-Log "Image mode is not implemented yet." -Level Warning
+    Write-Log "Starting Image mode for Windows 11 ISO optimization..." -Level Info
+
+    $driveLetter = Get-SourceIso
+
+    # Verify drive is still accessible before proceeding
+    $driveRoot = $driveLetter.Trim().TrimEnd(':') + ':\'
+
+    if (-not (Test-Path $driveRoot)) {
+        Write-Log "Critical: Drive $driveLetter was dismounted after validation!" -Level Error
+        Write-Log "The ISO may have been auto-dismounted by Windows." -Level Error
+        Write-Log "Please mount the ISO programmatically or keep it mounted." -Level Error
+        throw "Source drive was unexpectedly dismounted"
+    }
+
+    Copy-WindowsSource -SourcePath $driveLetter
+
+    $imageIndex = Select-WindowsImage
+    $imageInfo = $null
+    $imageMounted = $false
+    $hivesMounted = $false
+
+    try {
+        $imageInfo = Mount-WindowsInstallImage -Index $imageIndex
+        $imageMounted = $true
+
+        Remove-BloatwarePackages
+        Remove-OneDrive
+
+        try {
+            Mount-RegistryHives
+            $hivesMounted = $true
+            Apply-RegistryOptimizations
+            Remove-TelemetryTasks
+        } finally {
+            if ($hivesMounted) {
+                Dismount-RegistryHives
+                $hivesMounted = $false
+            }
+        }
+
+        Optimize-WindowsImage
+        Dismount-AndExport-Image -Index $imageIndex
+        $imageMounted = $false
+
+        Process-BootImage
+        New-BootableIso -Architecture $imageInfo.Architecture -Language $imageInfo.Language
+    } catch {
+        if ($hivesMounted) {
+            try { Dismount-RegistryHives } catch {}
+            $hivesMounted = $false
+        }
+        if ($imageMounted) {
+            Write-Log "Discarding mounted install image after failure..." -Level Warning
+            try { Dismount-WindowsImage -Path $Script:Paths.MountDir -Discard -ErrorAction SilentlyContinue } catch {}
+            $imageMounted = $false
+        }
+        throw
+    }
+
+    Write-Host ""
+    Write-Log "========================================" -Level Success
+    Write-Log "$($Config.ProjectName) image creation completed!" -Level Success
+    Write-Log "Output: $($Script:Paths.IsoOutput)" -Level Success
+    Write-Log "========================================" -Level Success
 }
 
 # Skip auto-run when dot-sourced (e.g. Pester tests)
