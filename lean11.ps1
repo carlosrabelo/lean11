@@ -992,6 +992,130 @@ function Remove-OneDrive {
     }
 }
 
+function Mount-RegistryHives {
+    Write-Log "Loading registry hives..." -Level Info
+
+    $hivesPath = "$($Script:Paths.MountDir)\Windows\System32\config"
+
+    # Load hives with error handling
+    $hives = @{
+        'HKLM\zCOMPONENTS' = "$hivesPath\COMPONENTS"
+        'HKLM\zDEFAULT' = "$hivesPath\default"
+        'HKLM\zNTUSER' = "$($Script:Paths.MountDir)\Users\Default\ntuser.dat"
+        'HKLM\zSOFTWARE' = "$hivesPath\SOFTWARE"
+        'HKLM\zSYSTEM' = "$hivesPath\SYSTEM"
+    }
+
+    foreach ($hive in $hives.GetEnumerator()) {
+        if (Test-Path $hive.Value) {
+            & reg load $hive.Key $hive.Value >$null 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Log "  Loaded: $($hive.Key)" -Level Info
+            } else {
+                Write-Log "  Failed to load $($hive.Key) (exit $LASTEXITCODE)" -Level Warning
+            }
+        } else {
+            Write-Log "  Hive file not found: $($hive.Value)" -Level Warning
+        }
+    }
+
+    Write-Log "Registry hives loading completed" -Level Success
+}
+
+function Dismount-RegistryHives {
+    Write-Log "Unloading registry hives..." -Level Info
+
+    foreach ($hive in @('HKLM\zCOMPONENTS', 'HKLM\zDEFAULT', 'HKLM\zNTUSER', 'HKLM\zSOFTWARE', 'HKLM\zSYSTEM')) {
+        & reg unload $hive >$null 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Log "  Failed to unload $hive (exit $LASTEXITCODE)" -Level Warning
+        }
+    }
+
+    Write-Log "Registry hives unloaded" -Level Success
+}
+
+function Set-RegistryOptimization {
+    param(
+        [Parameter(Mandatory=$true)]
+        [hashtable]$Optimization,
+
+        [Parameter(Mandatory=$true)]
+        [string]$Description
+    )
+
+    $path = "HKLM\$($Optimization.Hive)\$($Optimization.Path)"
+
+    & reg add $path /v $Optimization.Name /t $Optimization.Type /d $Optimization.Value /f >$null 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Log "  Failed to set $path\$($Optimization.Name) (exit $LASTEXITCODE)" -Level Warning
+    }
+}
+
+function Apply-RegistryOptimizations {
+    Write-Log "Applying registry optimizations..." -Level Info
+
+    Write-Log "  - System requirements bypass" -Level Info
+    foreach ($opt in $Script:RegistryOptimizations.SystemRequirementsBypass) {
+        Set-RegistryOptimization -Optimization $opt -Description "Hardware bypass"
+    }
+
+    Write-Log "  - Telemetry disable" -Level Info
+    foreach ($opt in $Script:RegistryOptimizations.TelemetryDisable) {
+        Set-RegistryOptimization -Optimization $opt -Description "Telemetry"
+    }
+
+    Write-Log "  - Sponsored apps disable" -Level Info
+    foreach ($opt in $Script:RegistryOptimizations.SponsoredAppsDisable) {
+        Set-RegistryOptimization -Optimization $opt -Description "Sponsored content"
+    }
+
+    Write-Log "  - OOBE local account enable" -Level Info
+    foreach ($opt in $Script:RegistryOptimizations.OOBELocalAccount) {
+        Set-RegistryOptimization -Optimization $opt -Description "Local account"
+    }
+
+    Write-Log "  - Miscellaneous optimizations" -Level Info
+    foreach ($opt in $Script:RegistryOptimizations.MiscOptimizations) {
+        Set-RegistryOptimization -Optimization $opt -Description "Misc"
+    }
+
+    $keysToRemove = @(
+        'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\Subscriptions'
+        'HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SuggestedApps'
+        'HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\OutlookUpdate'
+        'HKLM\zSOFTWARE\Microsoft\WindowsUpdate\Orchestrator\UScheduler_Oobe\DevHomeUpdate'
+    )
+
+    foreach ($key in $keysToRemove) {
+        & reg delete $key /f >$null 2>&1
+    }
+
+    Write-Log "Registry optimizations applied successfully" -Level Success
+}
+
+function Remove-TelemetryTasks {
+    Write-Log "Removing telemetry scheduled tasks..." -Level Info
+
+    $tasksPath = "$($Script:Paths.MountDir)\Windows\System32\Tasks"
+
+    foreach ($task in $Script:ScheduledTasksToRemove) {
+        $taskPath = Join-Path $tasksPath $task
+        if (Test-Path $taskPath) {
+            Remove-Item -Path $taskPath -Force -Recurse -ErrorAction SilentlyContinue
+            Write-Log "  Removed: $task" -Level Info
+        }
+    }
+
+    $ceipPath = "$tasksPath\Microsoft\Windows\Customer Experience Improvement Program"
+    if (Test-Path $ceipPath) {
+        Remove-Item -Path $ceipPath -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Log "  Removed: Customer Experience Improvement Program folder" -Level Info
+    }
+
+    Write-Log "Telemetry tasks removed" -Level Success
+}
+
 function Build-AutoUnattendContent {
     param(
         [string]$Architecture = 'amd64',
