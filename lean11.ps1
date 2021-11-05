@@ -1503,6 +1503,190 @@ function Should-KeepPackage {
     return $false
 }
 
+$Script:SupportsAppxPackageFamilyLookup = $null
+
+function Supports-AppxPackageFamilyLookup {
+    if ($null -ne $Script:SupportsAppxPackageFamilyLookup) {
+        return $Script:SupportsAppxPackageFamilyLookup
+    }
+
+    try {
+        $params = (Get-Command -Name Get-AppxPackage -ErrorAction Stop).Parameters
+        $Script:SupportsAppxPackageFamilyLookup = $params.ContainsKey('PackageFamilyName')
+    } catch {
+        $Script:SupportsAppxPackageFamilyLookup = $false
+    }
+
+    return $Script:SupportsAppxPackageFamilyLookup
+}
+
+function Get-RemovalCandidates {
+    [CmdletBinding()]
+    param()
+
+    Write-Log "Cataloging installed AppX packages..." -Level Info
+
+    $provisioned = @()
+    $installed = @()
+
+    try {
+        $provisioned = Get-AppxProvisionedPackage -Online -ErrorAction Stop
+    } catch {
+        Write-Log "Failed to query provisioned packages: $_" -Level Warning
+    }
+
+    try {
+        $installed = Get-AppxPackage -AllUsers -ErrorAction Stop
+    } catch {
+        Write-Log "Failed to query installed AppX packages: $_" -Level Warning
+    }
+
+    $unique = [System.Collections.Generic.HashSet[string]]::new()
+    $candidates = @()
+
+    foreach ($category in $Script:PackageCategories.Keys) {
+        foreach ($prefix in $Script:PackageCategories[$category]) {
+            $provMatches = $provisioned | Where-Object {
+                (Test-PackageNameMatch -PackageName $_.DisplayName -Pattern $prefix) -or
+                (Test-PackageNameMatch -PackageName $_.PackageName -Pattern $prefix)
+            }
+            foreach ($pkg in $provMatches) {
+                if ((Should-KeepPackage -PackageName $pkg.DisplayName) -or (Should-KeepPackage -PackageName $pkg.PackageName)) { continue }
+                $key = "Provisioned|$($pkg.PackageName)"
+                if ($unique.Add($key)) {
+                    $candidates += [PSCustomObject]@{
+                        Kind          = 'Provisioned'
+                        Category      = $category
+                        DisplayName   = $pkg.DisplayName
+                        PackageName   = $pkg.PackageName
+                        PackageFamily = $pkg.PackageFamilyName
+                    }
+                }
+            }
+
+            $appxMatches = $installed | Where-Object {
+                (Test-PackageNameMatch -PackageName $_.Name -Pattern $prefix) -or
+                (Test-PackageNameMatch -PackageName $_.PackageFullName -Pattern $prefix)
+            }
+            foreach ($pkg in $appxMatches) {
+                if ((Should-KeepPackage -PackageName $pkg.Name) -or (Should-KeepPackage -PackageName $pkg.PackageFullName)) { continue }
+                $key = "Installed|$($pkg.PackageFullName)"
+                if ($unique.Add($key)) {
+                    $candidates += [PSCustomObject]@{
+                        Kind            = 'Installed'
+                        Category        = $category
+                        DisplayName     = $pkg.Name
+                        PackageName     = $pkg.PackageFullName
+                        PackageFamily   = $pkg.PackageFamilyName
+                        InstallLocation = $pkg.InstallLocation
+                    }
+                }
+            }
+        }
+    }
+
+    $total = $candidates.Count
+    $categories = ($candidates | Group-Object Category | Sort-Object Count -Descending | ForEach-Object { "$($_.Name):$($_.Count)" }) -join ', '
+    Write-Log "Identified $total removable package entries. Breakdown: $categories" -Level Info
+
+    # Unary comma prevents PowerShell from unrolling an empty array into $null
+    return ,$candidates
+}
+
+function Remove-ProvisionedPackages {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        [array]$Candidates
+    )
+
+    if ($null -eq $Candidates) { $Candidates = @() }
+
+    $targets = @($Candidates | Where-Object { $_.Kind -eq 'Provisioned' })
+    if ($targets.Count -eq 0) {
+        Write-Log "No provisioned packages to remove." -Level Info
+        return
+    }
+
+    Write-Log "Removing provisioned packages..." -Level Info
+
+    foreach ($entry in $targets) {
+        if (-not $PSCmdlet.ShouldProcess($entry.DisplayName, 'Remove-AppxProvisionedPackage')) { continue }
+        try {
+            Remove-AppxProvisionedPackage -Online -PackageName $entry.PackageName -ErrorAction Stop | Out-Null
+            Write-Log "  Removed provisioned: $($entry.DisplayName) [$($entry.Category)]" -Level Success
+        } catch {
+            Write-Log "  Failed to remove provisioned $($entry.DisplayName): $_" -Level Warning
+        }
+    }
+}
+
+function Remove-InstalledPackages {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        [array]$Candidates
+    )
+
+    if ($null -eq $Candidates) { $Candidates = @() }
+
+    $targets = @($Candidates | Where-Object { $_.Kind -eq 'Installed' })
+    if ($targets.Count -eq 0) {
+        Write-Log "No installed AppX packages to remove." -Level Info
+        return
+    }
+
+    Write-Log "Removing installed AppX packages for all users..." -Level Info
+
+    $supportsPackageFamily = Supports-AppxPackageFamilyLookup
+    if (-not $supportsPackageFamily) {
+        Write-Log "Get-AppxPackage does not support PackageFamilyName parameter; using inventory fallback." -Level Info
+    }
+
+    $cachedInventory = $null
+
+    foreach ($entry in $targets) {
+        if (-not $PSCmdlet.ShouldProcess($entry.DisplayName, 'Remove-AppxPackage')) { continue }
+        $instances = @()
+
+        if ($supportsPackageFamily -and $entry.PackageFamily) {
+            $instances = Get-AppxPackage -AllUsers -PackageFamilyName $entry.PackageFamily -ErrorAction SilentlyContinue
+        }
+
+        if (-not $instances -and $entry.PackageName) {
+            if ($null -eq $cachedInventory) {
+                try {
+                    $cachedInventory = Get-AppxPackage -AllUsers -ErrorAction Stop
+                } catch {
+                    Write-Log ("  Failed to build installed AppX inventory: {0}" -f $_) -Level Warning
+                    $cachedInventory = @()
+                }
+            }
+            $instances = $cachedInventory | Where-Object {
+                $_.PackageFullName -eq $entry.PackageName -or $_.Name -eq $entry.DisplayName
+            }
+        }
+
+        if (-not $instances -or $instances.Count -eq 0) {
+            Write-Log "  Package not found: $($entry.DisplayName)" -Level Warning
+            continue
+        }
+
+        foreach ($instance in $instances) {
+            try {
+                Remove-AppxPackage -Package $instance.PackageFullName -AllUsers -ErrorAction Stop
+                Write-Log "  Removed installed: $($instance.Name)" -Level Success
+            } catch {
+                Write-Log ("  Failed to remove {0}: {1}" -f $instance.Name, $_) -Level Warning
+            }
+        }
+    }
+}
+
 function Convert-RegistryValue {
     param(
         [Parameter(Mandatory = $true)]
