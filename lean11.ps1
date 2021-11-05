@@ -1831,6 +1831,129 @@ function Convert-RegistryValue {
     }
 }
 
+function Set-RegistryValueDebloat {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Definition
+    )
+
+    $targetPath = Resolve-RegPath -Hive $Definition.Hive -Path $Definition.Path
+    $propertyType = switch ($Definition.Type.ToUpper()) {
+        'REG_DWORD' { 'DWord' }
+        'REG_QWORD' { 'QWord' }
+        'REG_BINARY' { 'Binary' }
+        'REG_MULTI_SZ' { 'MultiString' }
+        default { 'String' }
+    }
+
+    if (-not (Test-Path $targetPath)) {
+        try {
+            New-Item -Path $targetPath -Force | Out-Null
+        } catch {
+            Write-Log ("  Failed to create registry path {0}: {1}" -f $targetPath, $_) -Level Warning
+            return
+        }
+    }
+
+    $value = Convert-RegistryValue -Definition $Definition
+
+    $identifier = "$($Definition.Hive)\$($Definition.Path)\$($Definition.Name)"
+    if (-not $PSCmdlet.ShouldProcess($identifier, 'Set registry value')) { return }
+
+    try {
+        New-ItemProperty -Path $targetPath -Name $Definition.Name -Value $value -PropertyType $propertyType -Force | Out-Null
+        Write-Log "  Set registry: $identifier = $($Definition.Value)" -Level Success
+    } catch {
+        Write-Log ("  Failed to set {0}: {1}" -f $identifier, $_) -Level Warning
+    }
+}
+
+function Apply-RegistryOptimizationsDebloat {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param()
+
+    Write-Log "Applying registry optimizations..." -Level Info
+
+    $debloatRegistryOptimizations = @{
+        TelemetryDisable = @(
+            @{Hive = 'HKCU'; Path = 'Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo'; Name = 'Enabled'; Type = 'REG_DWORD'; Value = 0}
+            @{Hive = 'HKCU'; Path = 'Software\Microsoft\Windows\CurrentVersion\Privacy'; Name = 'TailoredExperiencesWithDiagnosticDataEnabled'; Type = 'REG_DWORD'; Value = 0}
+            @{Hive = 'HKCU'; Path = 'Software\Microsoft\Speech_OneCore\Settings\OnlineSpeechPrivacy'; Name = 'HasAccepted'; Type = 'REG_DWORD'; Value = 0}
+            @{Hive = 'HKCU'; Path = 'Software\Microsoft\Input\TIPC'; Name = 'Enabled'; Type = 'REG_DWORD'; Value = 0}
+            @{Hive = 'HKCU'; Path = 'Software\Microsoft\InputPersonalization'; Name = 'RestrictImplicitInkCollection'; Type = 'REG_DWORD'; Value = 1}
+            @{Hive = 'HKCU'; Path = 'Software\Microsoft\InputPersonalization'; Name = 'RestrictImplicitTextCollection'; Type = 'REG_DWORD'; Value = 1}
+            @{Hive = 'HKCU'; Path = 'Software\Microsoft\InputPersonalization\TrainedDataStore'; Name = 'HarvestContacts'; Type = 'REG_DWORD'; Value = 0}
+            @{Hive = 'HKCU'; Path = 'Software\Microsoft\Personalization\Settings'; Name = 'AcceptedPrivacyPolicy'; Type = 'REG_DWORD'; Value = 0}
+            @{Hive = 'HKLM'; Path = 'SOFTWARE\Policies\Microsoft\Windows\DataCollection'; Name = 'AllowTelemetry'; Type = 'REG_DWORD'; Value = 0}
+            @{Hive = 'HKLM'; Path = 'SYSTEM\CurrentControlSet\Services\dmwappushservice'; Name = 'Start'; Type = 'REG_DWORD'; Value = 4}
+        )
+
+        SponsoredAppsDisable = @(
+            @{Hive = 'HKCU'; Path = 'SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'OemPreInstalledAppsEnabled'; Type = 'REG_DWORD'; Value = 0}
+            @{Hive = 'HKCU'; Path = 'SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'PreInstalledAppsEnabled'; Type = 'REG_DWORD'; Value = 0}
+            @{Hive = 'HKCU'; Path = 'SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SilentInstalledAppsEnabled'; Type = 'REG_DWORD'; Value = 0}
+            @{Hive = 'HKLM'; Path = 'SOFTWARE\Policies\Microsoft\Windows\CloudContent'; Name = 'DisableWindowsConsumerFeatures'; Type = 'REG_DWORD'; Value = 1}
+            @{Hive = 'HKCU'; Path = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'ContentDeliveryAllowed'; Type = 'REG_DWORD'; Value = 0}
+            @{Hive = 'HKLM'; Path = 'SOFTWARE\Microsoft\PolicyManager\current\device\Start'; Name = 'ConfigureStartPins'; Type = 'REG_SZ'; Value = '{"pinnedList": [{}]}'}
+            @{Hive = 'HKCU'; Path = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'FeatureManagementEnabled'; Type = 'REG_DWORD'; Value = 0}
+            @{Hive = 'HKCU'; Path = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'PreInstalledAppsEverEnabled'; Type = 'REG_DWORD'; Value = 0}
+            @{Hive = 'HKCU'; Path = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SoftLandingEnabled'; Type = 'REG_DWORD'; Value = 0}
+            @{Hive = 'HKCU'; Path = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SubscribedContentEnabled'; Type = 'REG_DWORD'; Value = 0}
+            @{Hive = 'HKLM'; Path = 'SOFTWARE\Policies\Microsoft\PushToInstall'; Name = 'DisablePushToInstall'; Type = 'REG_DWORD'; Value = 1}
+            @{Hive = 'HKLM'; Path = 'SOFTWARE\Policies\Microsoft\MRT'; Name = 'DontOfferThroughWUAU'; Type = 'REG_DWORD'; Value = 1}
+            @{Hive = 'HKLM'; Path = 'SOFTWARE\Policies\Microsoft\Windows\CloudContent'; Name = 'DisableConsumerAccountStateContent'; Type = 'REG_DWORD'; Value = 1}
+            @{Hive = 'HKLM'; Path = 'SOFTWARE\Policies\Microsoft\Windows\CloudContent'; Name = 'DisableCloudOptimizedContent'; Type = 'REG_DWORD'; Value = 1}
+        )
+
+        MiscOptimizations = @(
+            @{Hive = 'HKLM'; Path = 'SOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager'; Name = 'ShippedWithReserves'; Type = 'REG_DWORD'; Value = 0}
+            @{Hive = 'HKLM'; Path = 'SYSTEM\CurrentControlSet\Control\BitLocker'; Name = 'PreventDeviceEncryption'; Type = 'REG_DWORD'; Value = 1}
+            @{Hive = 'HKLM'; Path = 'SOFTWARE\Policies\Microsoft\Windows\Windows Chat'; Name = 'ChatIcon'; Type = 'REG_DWORD'; Value = 3}
+            @{Hive = 'HKCU'; Path = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'TaskbarMn'; Type = 'REG_DWORD'; Value = 0}
+            @{Hive = 'HKCU'; Path = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'ShowCopilotButton'; Type = 'REG_DWORD'; Value = 0}
+            @{Hive = 'HKLM'; Path = 'SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot'; Name = 'TurnOffWindowsCopilot'; Type = 'REG_DWORD'; Value = 1}
+            @{Hive = 'HKCU'; Path = 'Software\Policies\Microsoft\Windows\WindowsCopilot'; Name = 'TurnOffWindowsCopilot'; Type = 'REG_DWORD'; Value = 1}
+            @{Hive = 'HKLM'; Path = 'SOFTWARE\Policies\Microsoft\Windows\OneDrive'; Name = 'DisableFileSyncNGSC'; Type = 'REG_DWORD'; Value = 1}
+            @{Hive = 'HKLM'; Path = 'SOFTWARE\Policies\Microsoft\Teams'; Name = 'DisableInstallation'; Type = 'REG_DWORD'; Value = 1}
+            @{Hive = 'HKLM'; Path = 'SOFTWARE\Policies\Microsoft\Windows\Windows Mail'; Name = 'PreventRun'; Type = 'REG_DWORD'; Value = 1}
+        )
+    }
+
+    foreach ($category in $debloatRegistryOptimizations.Keys) {
+        Write-Log "  - $category" -Level Info
+        foreach ($definition in $debloatRegistryOptimizations[$category]) {
+            Set-RegistryValueDebloat -Definition $definition
+        }
+    }
+}
+
+function Disable-TelemetryTasksDebloat {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param()
+
+    Write-Log "Disabling telemetry-related scheduled tasks..." -Level Info
+
+    $debloatScheduledTasks = @(
+        '\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser'
+        '\Microsoft\Windows\Application Experience\ProgramDataUpdater'
+        '\Microsoft\Windows\Windows Error Reporting\QueueReporting'
+        '\Microsoft\Windows\Customer Experience Improvement Program\Consolidator'
+    )
+
+    foreach ($task in $debloatScheduledTasks) {
+        if (-not $PSCmdlet.ShouldProcess($task, 'Disable scheduled task')) { continue }
+        # Avoid piping native output — it can clear/misreport $LASTEXITCODE in Windows PowerShell
+        & schtasks.exe /Change /TN $task /Disable 2>&1 | Out-Null
+        $taskExit = $LASTEXITCODE
+        if ($taskExit -eq 0) {
+            Write-Log "  Disabled: $task" -Level Success
+        } else {
+            Write-Log ("  Skipped {0} (exit {1}; task may not exist on this build)" -f $task, $taskExit) -Level Warning
+        }
+    }
+}
+
 function Start-DebloatMode {
     Write-Log "Debloat mode is not implemented yet." -Level Warning
 }
