@@ -1687,6 +1687,135 @@ function Remove-InstalledPackages {
     }
 }
 
+function Remove-OneDriveDebloat {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param()
+
+    $oneDrivePaths = @(
+        "$env:SystemRoot\System32\OneDriveSetup.exe",
+        "$env:SystemRoot\SysWOW64\OneDriveSetup.exe"
+    )
+
+    $found = $false
+
+    foreach ($path in $oneDrivePaths) {
+        if (-not (Test-Path $path)) { continue }
+        $found = $true
+        if (-not $PSCmdlet.ShouldProcess($path, 'Uninstall OneDrive')) { continue }
+        try {
+            Start-Process -FilePath $path -ArgumentList '/uninstall' -Wait -ErrorAction Stop
+            Write-Log "  Invoked OneDrive uninstaller: $path" -Level Success
+        } catch {
+            Write-Log ("  Failed to uninstall OneDrive via {0}: {1}" -f $path, $_) -Level Warning
+        }
+    }
+
+    if (-not $found) {
+        Write-Log "OneDrive installer not found; assuming already removed." -Level Info
+    }
+
+    # Only remove installer/cache leftovers — never the user OneDrive documents folder
+    $leftovers = @(
+        "$env:LocalAppData\Microsoft\OneDrive",
+        "$env:ProgramData\Microsoft OneDrive"
+    )
+
+    foreach ($item in $leftovers) {
+        if (-not (Test-Path $item)) { continue }
+        if (-not $PSCmdlet.ShouldProcess($item, 'Remove OneDrive residual files')) { continue }
+        try {
+            Remove-Item -Path $item -Recurse -Force -ErrorAction Stop
+            Write-Log "  Deleted leftover: $item" -Level Info
+        } catch {
+            Write-Log ("  Failed to delete leftover {0}: {1}" -f $item, $_) -Level Warning
+        }
+    }
+}
+
+function Remove-StartMenuShortcuts {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [string[]]$Patterns = $Script:StartMenuShortcutPatterns
+    )
+
+    if (-not $Patterns -or $Patterns.Count -eq 0) {
+        Write-Log "No Start menu shortcut patterns configured; skipping cleanup." -Level Info
+        return
+    }
+
+    $systemDrive = $env:SystemDrive
+    if (-not $systemDrive) { $systemDrive = 'C:' }
+
+    $candidatePaths = [System.Collections.Generic.HashSet[string]]::new()
+
+    $programDataPath = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
+    if (Test-Path $programDataPath) {
+        [void]$candidatePaths.Add((Get-Item -LiteralPath $programDataPath).FullName)
+    }
+
+    $defaultProfilePath = Join-Path $systemDrive 'Users\Default\AppData\Roaming\Microsoft\Windows\Start Menu\Programs'
+    if (Test-Path $defaultProfilePath) {
+        [void]$candidatePaths.Add((Get-Item -LiteralPath $defaultProfilePath).FullName)
+    }
+
+    try {
+        $userProfiles = Get-ChildItem -Path (Join-Path $systemDrive 'Users') -Directory -ErrorAction Stop |
+            Where-Object { $_.Name -notmatch '^(Default|Default User|All Users|Public)$' }
+
+        foreach ($profile in $userProfiles) {
+            $userStartMenu = Join-Path $profile.FullName 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs'
+            if (Test-Path $userStartMenu) {
+                [void]$candidatePaths.Add((Get-Item -LiteralPath $userStartMenu).FullName)
+            }
+        }
+    } catch {
+        Write-Log ("Failed to enumerate user profiles for Start menu cleanup: {0}" -f $_) -Level Warning
+    }
+
+    if ($candidatePaths.Count -eq 0) {
+        Write-Log "Start menu shortcut locations not found; skipping cleanup." -Level Info
+        return
+    }
+
+    Write-Log "Removing promotional Start menu shortcuts..." -Level Info
+    $removed = 0
+    $visited = [System.Collections.Generic.HashSet[string]]::new()
+
+    foreach ($path in $candidatePaths) {
+        $shortcuts = Get-ChildItem -Path $path -Include *.lnk,*.url -File -Recurse -ErrorAction SilentlyContinue
+        foreach ($shortcut in $shortcuts) {
+            $shortcutKey = $shortcut.FullName.ToLowerInvariant()
+            if (-not $visited.Add($shortcutKey)) { continue }
+
+            $matchedPattern = $null
+            foreach ($pattern in $Patterns) {
+                if ($shortcut.BaseName -like $pattern -or $shortcut.Name -like "$pattern.*") {
+                    $matchedPattern = $pattern
+                    break
+                }
+            }
+
+            if (-not $matchedPattern) { continue }
+
+            if (-not $PSCmdlet.ShouldProcess($shortcut.FullName, 'Remove Start menu shortcut')) { continue }
+
+            try {
+                Remove-Item -Path $shortcut.FullName -Force -ErrorAction Stop
+                Write-Log ("  Removed shortcut: {0} (pattern: {1})" -f $shortcut.FullName, $matchedPattern) -Level Success
+                $removed++
+            } catch {
+                Write-Log ("  Failed to remove shortcut {0}: {1}" -f $shortcut.FullName, $_) -Level Warning
+            }
+        }
+    }
+
+    if ($removed -eq 0) {
+        Write-Log "No promotional Start menu shortcuts found." -Level Info
+    } else {
+        Write-Log "Removed $removed Start menu shortcuts." -Level Success
+    }
+}
+
 function Convert-RegistryValue {
     param(
         [Parameter(Mandatory = $true)]
