@@ -1955,7 +1955,34 @@ function Disable-TelemetryTasksDebloat {
 }
 
 function Start-DebloatMode {
-    Write-Log "Debloat mode is not implemented yet." -Level Warning
+    Write-Log "Starting Debloat mode for live Windows 11 system..." -Level Info
+
+    # @() guards against empty-array unrolling to $null (PowerShell pipeline quirk)
+    $candidates = @(Get-RemovalCandidates)
+    Remove-ProvisionedPackages -Candidates $candidates
+    Remove-InstalledPackages -Candidates $candidates
+
+    if (-not $SkipOneDrive) {
+        Remove-OneDriveDebloat
+    } else {
+        Write-Log "Skipping OneDrive removal as requested." -Level Info
+    }
+
+    Remove-StartMenuShortcuts
+
+    if (-not $SkipRegistryOptimizations) {
+        Apply-RegistryOptimizationsDebloat
+    } else {
+        Write-Log "Skipping registry optimizations as requested." -Level Info
+    }
+
+    if (-not $SkipScheduledTasks) {
+        Disable-TelemetryTasksDebloat
+    } else {
+        Write-Log "Skipping scheduled task changes as requested." -Level Info
+    }
+
+    Write-Log "Debloat routine completed successfully." -Level Success
 }
 
 function Start-ImageMode {
