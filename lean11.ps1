@@ -25,7 +25,8 @@
     Debloat: Cleans live Windows 11 system
 
 .PARAMETER ISO
-    Drive letter of mounted Windows 11 ISO media (Image mode only)
+    Drive letter of mounted Windows 11 ISO (e.g., E) or path to ISO file (Image mode only)
+    If a file path is provided, the ISO will be mounted automatically
 
 .PARAMETER SCRATCH
     Optional drive letter for temporary workspace (Image mode only)
@@ -44,8 +45,12 @@
     Skip telemetry task disablement (Debloat mode only)
 
 .EXAMPLE
-    # Image mode: Create optimized ISO
+    # Image mode: Create optimized ISO with mounted drive
     .\lean11.ps1 -Mode Image -ISO E -SCRATCH D
+
+.EXAMPLE
+    # Image mode: Auto-mount ISO from file path
+    .\lean11.ps1 -Mode Image -ISO "C:\ISOs\Win11.iso" -SCRATCH D
 
 .EXAMPLE
     # Image mode: Keep specific packages
@@ -123,6 +128,10 @@ $Script:Paths = @{
     Oscdimg = $null
     TranscriptPath = $null
 }
+
+# ISO mounting tracking
+$Script:IsoMountedByScript = $false
+$Script:SourceDriveLetter = $null
 
 # DUPLICATE PACKAGE DECISIONS:
 # -------------------------------------------------------------------------
@@ -310,7 +319,8 @@ function Write-Log {
         default   { Write-Host $logMessage }
     }
 
-    Write-Output $logMessage
+    # Don't use Write-Output as it pollutes the pipeline and can contaminate function returns
+    # Write-Host is sufficient for logging to console
 }
 
 function Test-AdminPrivileges {
@@ -412,16 +422,38 @@ function Get-SourceIso {
 
     do {
         if (-not $ISO) {
-            $driveLetter = Read-Host "Enter the drive letter of the mounted Windows 11 ISO (e.g., E)"
+            $isoInput = Read-Host "Enter the drive letter of mounted Windows 11 ISO (e.g., E) or path to ISO file"
         } else {
-            $driveLetter = $ISO
+            $isoInput = $ISO
         }
 
-        # Accept both "E" and "E:" formats
-        if ($driveLetter -notmatch '^[c-zC-Z]:?$') {
-            Write-Log "Invalid drive letter. Please enter a single letter (C-Z)" -Level Warning
-            $ISO = $null
-            continue
+        # Check if input is a file path (ISO file)
+        if ($isoInput -match '\.(iso|ISO)$' -or (Test-Path $isoInput -PathType Leaf)) {
+            Write-Log "Mounting ISO file: $isoInput" -Level Info
+            try {
+                $mountResult = Mount-DiskImage -ImagePath $isoInput -PassThru -ErrorAction Stop
+                $driveLetter = ($mountResult | Get-Volume).DriveLetter
+                if (-not $driveLetter) {
+                    Write-Log "Failed to get drive letter after mounting ISO" -Level Error
+                    $ISO = $null
+                    continue
+                }
+                Write-Log "ISO mounted successfully at drive $driveLetter" -Level Success
+                $Script:IsoMountedByScript = $true
+            } catch {
+                Write-Log "Failed to mount ISO: $_" -Level Error
+                $ISO = $null
+                continue
+            }
+        } else {
+            # Accept both "E" and "E:" formats
+            if ($isoInput -notmatch '^[c-zC-Z]:?$') {
+                Write-Log "Invalid input. Enter a drive letter (C-Z) or path to ISO file" -Level Warning
+                $ISO = $null
+                continue
+            }
+            $driveLetter = $isoInput
+            $Script:IsoMountedByScript = $false
         }
 
         # Normalize to drive letter with colon and backslash
@@ -524,18 +556,58 @@ function Get-SourceIso {
 function Copy-WindowsSource {
     param([string]$SourcePath)
 
-    # Normalize source path to include trailing backslash
-    if (-not $SourcePath.EndsWith('\')) {
-        $SourcePath = $SourcePath + '\'
+    # Normalize source path - ensure it has : and \ for root access
+    $SourcePath = $SourcePath.Trim().TrimEnd(':').TrimEnd('\')
+    $driveRoot = "${SourcePath}:\"
+
+    Write-Log "Copying Windows installation files from $driveRoot..." -Level Info
+    Write-Log "DEBUG: Normalized path components - Letter: '$SourcePath', Root: '$driveRoot'" -Level Info
+
+    # Give Windows a moment to settle if ISO was just mounted
+    Start-Sleep -Milliseconds 500
+
+    # Try multiple verification methods
+    $pathExists = $false
+
+    # Method 1: Test-Path
+    if (Test-Path $driveRoot) {
+        $pathExists = $true
+        Write-Log "DEBUG: Test-Path verification succeeded" -Level Info
     }
 
-    Write-Log "Copying Windows installation files from $SourcePath..." -Level Info
+    # Method 2: Get-PSDrive
+    if (-not $pathExists) {
+        $drive = Get-PSDrive -Name $SourcePath -PSProvider FileSystem -ErrorAction SilentlyContinue
+        if ($drive) {
+            $pathExists = $true
+            Write-Log "DEBUG: Get-PSDrive verification succeeded" -Level Info
+        }
+    }
 
-    # Verify source path is accessible
-    if (-not (Test-Path $SourcePath)) {
-        Write-Log "Source path not accessible: $SourcePath" -Level Error
+    # Method 3: Get-Volume
+    if (-not $pathExists) {
+        $volume = Get-Volume -DriveLetter $SourcePath -ErrorAction SilentlyContinue
+        if ($volume) {
+            $pathExists = $true
+            Write-Log "DEBUG: Get-Volume verification succeeded" -Level Info
+        }
+    }
+
+    if (-not $pathExists) {
+        Write-Log "Source path not accessible: $driveRoot" -Level Error
+        Write-Log "Attempted path: '$driveRoot' (Length: $($driveRoot.Length))" -Level Error
+        Write-Log "Verifying drives..." -Level Info
+        try {
+            Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Name -match '^[A-Z]$' } | ForEach-Object {
+                Write-Log "  Available drive: $($_.Name): $($_.Root)" -Level Info
+            }
+        } catch {
+            Write-Log "Could not enumerate drives: $_" -Level Warning
+        }
         throw "Source path validation failed"
     }
+
+    $SourcePath = $driveRoot
 
     # Check available disk space - more reasonable requirement
     try {
@@ -1150,12 +1222,17 @@ function New-BootableIso {
 function Clear-WorkingDirectories {
     Write-Log "Cleaning up working directories..." -Level Info
 
-    if ($Script:SourceDriveLetter) {
+    # Only dismount if we mounted it
+    if ($Script:IsoMountedByScript -and $Script:SourceDriveLetter) {
         try {
+            Write-Log "Dismounting ISO from drive $Script:SourceDriveLetter..." -Level Info
             Get-Volume -DriveLetter $Script:SourceDriveLetter[0] -ErrorAction SilentlyContinue |
                 Get-DiskImage |
                 Dismount-DiskImage -ErrorAction SilentlyContinue
-        } catch {}
+            Write-Log "ISO dismounted successfully" -Level Success
+        } catch {
+            Write-Log "Could not dismount ISO: $_" -Level Warning
+        }
     }
 
     $itemsToRemove = @(
@@ -1166,7 +1243,7 @@ function Clear-WorkingDirectories {
     )
 
     foreach ($item in $itemsToRemove) {
-        if (Test-Path $item.Path) {
+        if ($item.Path -and (Test-Path $item.Path)) {
             try {
                 Remove-Item -Path $item.Path -Recurse -Force -ErrorAction Stop
                 Write-Log "  Removed: $($item.Desc)" -Level Info
@@ -1175,6 +1252,7 @@ function Clear-WorkingDirectories {
 
                 # Try to force removal with takeown/icacls
                 try {
+                    if (-not $item.Path) { throw "Path is null" }
                     $adminGroup = Get-AdministratorsGroup
                     & takeown /F $item.Path /R /D Y >$null 2>&1
                     & icacls $item.Path /grant "$($adminGroup):(F)" /T /C >$null 2>&1
@@ -1783,6 +1861,20 @@ function Start-ImageMode {
     Write-Log "Starting Image mode for Windows 11 ISO optimization..." -Level Info
 
     $driveLetter = Get-SourceIso
+    Write-Log "DEBUG: Get-SourceIso returned: '$driveLetter'" -Level Info
+
+    # Verify drive is still accessible before proceeding
+    $driveRoot = $driveLetter.Trim().TrimEnd(':') + ':\'
+    Write-Log "DEBUG: Pre-copy verification for: '$driveRoot'" -Level Info
+
+    if (-not (Test-Path $driveRoot)) {
+        Write-Log "Critical: Drive $driveLetter was dismounted after validation!" -Level Error
+        Write-Log "The ISO may have been auto-dismounted by Windows." -Level Error
+        Write-Log "Please mount the ISO programmatically or keep it mounted." -Level Error
+        throw "Source drive was unexpectedly dismounted"
+    }
+    Write-Log "DEBUG: Pre-copy verification succeeded" -Level Info
+
     Copy-WindowsSource -SourcePath $driveLetter
 
     $imageIndex = Select-WindowsImage
