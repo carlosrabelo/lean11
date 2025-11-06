@@ -1923,7 +1923,7 @@ function Start-ImageMode {
     Process-BootImage
     New-BootableIso -Architecture $imageInfo.Architecture
 
-    Write-Log "" -Level Info
+    Write-Host ""
     Write-Log "========================================" -Level Success
     Write-Log "$($Config.ProjectName) image creation completed!" -Level Success
     Write-Log "Output: $($Script:Paths.IsoOutput)" -Level Success
