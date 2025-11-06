@@ -6,19 +6,27 @@
 [![GitHub stars](https://img.shields.io/github/stars/carlosrabelo/lean11)](https://github.com/carlosrabelo/lean11/stargazers)
 [![GitHub issues](https://img.shields.io/github/issues/carlosrabelo/lean11)](https://github.com/carlosrabelo/lean11/issues)
 
-**Modular Windows 11 image optimizer with Edge and Copilot preservation**
+**Dual-mode Windows 11 optimizer: Create debloated ISOs or clean installed systems**
 
 ---
 
 ## About
 
-Lean11 is a PowerShell tool that automates the creation of optimized Windows 11 images through a modular component-based architecture and declarative configuration. Unlike traditional approaches, it uses hashtables for behavior definition and a multi-level logging system.
+Lean11 is a PowerShell-based Windows 11 optimizer that operates in two distinct modes:
 
-## Scripts
+**Image Mode**: Creates debloated Windows 11 installation media
+- Mounts original Windows 11 ISO
+- Removes bloatware packages before installation
+- Applies privacy and performance optimizations
+- Exports optimized bootable ISO (~36% smaller)
 
-- `lean11.ps1`: Unified Windows 11 optimizer with dual operation modes:
-  - **Image Mode**: Creates optimized ISO by mounting original image, removing bloatware, applying registry tweaks, and exporting new install media
-  - **Debloat Mode**: Applies the same removal and optimization set on an already installed Windows 11 system without rebuilding ISO
+**Debloat Mode**: Cleans up already-installed Windows 11 systems
+- Removes bloatware from running systems
+- Applies same optimizations as Image Mode
+- No ISO required - runs directly on your machine
+- Ideal for cleaning pre-installed or existing installations
+
+Both modes share the same modular architecture using hashtables for configuration and multi-level logging system.
 
 ### Design Philosophy
 
@@ -92,17 +100,21 @@ This approach allows modifications without altering logic.
 
 ### Environment Setup
 
+**1. Get Windows 11 ISO**
+
+Source: https://www.microsoft.com/software-download/windows11
+
+**2. Mount ISO on the system**
+
+Method: Windows Explorer → Right-click → Mount
+
+**3. Configure execution policy (temporary session)**
 ```powershell
-# 1. Get Windows 11 ISO
-# Source: https://www.microsoft.com/software-download/windows11
-
-# 2. Mount ISO on the system
-# Method: Windows Explorer → Right-click → Mount
-
-# 3. Configure execution policy (temporary session)
 Set-ExecutionPolicy Bypass -Scope Process
+```
 
-# 4. Run optimizer
+**4. Run optimizer**
+```powershell
 .\lean11.ps1 -ISO <letter> -SCRATCH <letter>
 ```
 
@@ -121,11 +133,14 @@ Set-ExecutionPolicy Bypass -Scope Process
 ```
 
 **Selective Preservation Mode**
-```powershell
-# Preserve Windows Terminal and Paint
-.\lean11.ps1 -Mode Image -ISO E -SCRATCH D -KeepPackages "WindowsTerminal","Paint"
 
-# Preserve multiple packages
+Preserve Windows Terminal and Paint:
+```powershell
+.\lean11.ps1 -Mode Image -ISO E -SCRATCH D -KeepPackages "WindowsTerminal","Paint"
+```
+
+Preserve multiple packages:
+```powershell
 .\lean11.ps1 -Mode Image -ISO E -SCRATCH D -KeepPackages "Calculator","StickyNotes","ScreenSketch"
 ```
 
@@ -139,20 +154,28 @@ Set-ExecutionPolicy Bypass -Scope Process
 
 Run from an elevated PowerShell session on the machine you want to clean up.
 
+Standard debloat:
 ```powershell
-# Standard debloat
 .\lean11.ps1 -Mode Debloat
+```
 
-# Remove default bloat while keeping Windows Terminal and Paint
+Remove default bloat while keeping Windows Terminal and Paint:
+```powershell
 .\lean11.ps1 -Mode Debloat -KeepPackages "WindowsTerminal","Paint"
+```
 
-# Skip OneDrive removal
+Skip OneDrive removal:
+```powershell
 .\lean11.ps1 -Mode Debloat -SkipOneDrive
+```
 
-# Skip registry optimizations
+Skip registry optimizations:
+```powershell
 .\lean11.ps1 -Mode Debloat -SkipRegistryOptimizations
+```
 
-# Skip scheduled tasks
+Skip scheduled tasks:
+```powershell
 .\lean11.ps1 -Mode Debloat -SkipScheduledTasks
 ```
 
@@ -179,23 +202,33 @@ Run from an elevated PowerShell session on the machine you want to clean up.
 
 ### Working Remote Methods
 
+**Method 1: Download then Execute**
 ```powershell
-# Method 1: Download then Execute
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/carlosrabelo/lean11/master/lean11.ps1" -OutFile "lean11.ps1"
+```
+```powershell
 Set-ExecutionPolicy Bypass -Scope Process
+```
+```powershell
 .\lean11.ps1 -Mode Debloat
 ```
 
+**Method 2: GitHub CLI (Recommended)**
 ```powershell
-# Method 2: GitHub CLI (Recommended)
 gh repo clone carlosrabelo/lean11
+```
+```powershell
 cd lean11
+```
+```powershell
 .\lean11.ps1 -Mode Debloat
 ```
 
+**Method 3: PowerShell Gallery (if available)**
 ```powershell
-# Method 3: PowerShell Gallery (if available)
 Install-Script -Name Lean11 -Force
+```
+```powershell
 Lean11.ps1 -Mode Debloat
 ```
 
@@ -208,30 +241,39 @@ irm "https://raw.githubusercontent.com/carlosrabelo/lean11/master/lean11.ps1" | 
 
 ### With Parameters
 
+Image mode with parameters (Method 1: Direct execution):
 ```powershell
-# Image mode with parameters (Method 1: Direct execution)
 Invoke-Expression "& { $(irm 'https://raw.githubusercontent.com/carlosrabelo/lean11/master/lean11.ps1') } -Mode Image -ISO E"
+```
 
-# Image mode with parameters (Method 2: Variable approach)
+Image mode with parameters (Method 2: Variable approach):
+```powershell
 $script = irm "https://raw.githubusercontent.com/carlosrabelo/lean11/master/lean11.ps1"
 $script | Save-String lean11.ps1
 .\lean11.ps1 -Mode Image -ISO E -SCRATCH D
+```
 
-# Debloat mode with parameters
+Debloat mode with parameters:
+```powershell
 Invoke-Expression "& { $(irm 'https://raw.githubusercontent.com/carlosrabelo/lean11/master/lean11.ps1') } -Mode Debloat -KeepPackages 'WindowsTerminal','Paint'"
 ```
 
 ### Safer Alternatives
 
 **1. Download and Verify**
+
+Download first:
 ```powershell
-# Download first
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/carlosrabelo/lean11/master/lean11.ps1" -OutFile "lean11.ps1"
+```
 
-# Verify content (optional)
+Verify content (optional):
+```powershell
 Get-Content lean11.ps1 | Select-Object -First 20
+```
 
-# Execute after verification
+Execute after verification:
+```powershell
 .\lean11.ps1 -Mode Debloat
 ```
 
@@ -251,7 +293,11 @@ if ($hash.Hash -eq $expectedHash) {
 **3. GitHub CLI**
 ```powershell
 gh repo clone carlosrabelo/lean11
+```
+```powershell
 cd lean11
+```
+```powershell
 .\lean11.ps1 -Mode Debloat
 ```
 
@@ -276,13 +322,13 @@ The optimization process removes the following software categories:
 
 ### Preserved Components
 
-The following components remain **100% functional**:
+The following essential Windows components remain **fully functional**:
 
-- Microsoft Edge (default browser)
-- Windows Copilot (AI assistant)
-- Microsoft Store (app installation)
-- Windows Defender (security)
-- Update system (Windows Update)
+- **Microsoft Store**: App installation and updates
+- **Windows Defender**: Security and antivirus protection
+- **Windows Update**: System updates and patches
+- **Microsoft Edge**: Default browser
+- **Windows Copilot**: AI assistant (can be removed via KeepPackages if desired)
 
 ### System Optimizations
 
