@@ -1200,7 +1200,14 @@ function New-BootableIso {
     }
 
     Copy-Item -Path $Script:Paths.AutoUnattend -Destination "$($Script:Paths.WorkDir)\autounattend.xml" -Force
-    Copy-Item -Path $Script:Paths.AutoUnattend -Destination "$($Script:Paths.MountDir)\Windows\System32\Sysprep\autounattend.xml" -Force -ErrorAction SilentlyContinue
+
+    # Only copy to Sysprep folder if it exists (some boot images don't have this directory)
+    $sysprepPath = "$($Script:Paths.MountDir)\Windows\System32\Sysprep"
+    if (Test-Path $sysprepPath) {
+        Copy-Item -Path $Script:Paths.AutoUnattend -Destination "$sysprepPath\autounattend.xml" -Force -ErrorAction SilentlyContinue
+    } else {
+        Write-Log "Sysprep directory not found in mount, skipping autounattend copy to Sysprep" -Level Warning
+    }
 
     $oscdimg = Get-OscdimgTool
 
